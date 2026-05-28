@@ -279,7 +279,7 @@ def main():
     st.markdown("---")
 
     # ── Main Tabs ─────────────────────────────────────────────────────────────
-    tabs = st.tabs(["📊 Dashboard","🌍 Global Markets","🔬 Analysis","🤖 AI Chat","📝 Paper Trade","📈 Backtest"])
+    tabs = st.tabs(["📊 Dashboard","🔍 Market Scan","🌍 Global Markets","🔬 Analysis","🤖 AI Chat","📝 Paper Trade","📈 Backtest"])
 
     # ════════════════════════════════════════════════════════════════════════
     # TAB 1 — DASHBOARD
@@ -426,9 +426,185 @@ def main():
                 st.dataframe(pd.DataFrame(rows),use_container_width=True,hide_index=True)
 
     # ════════════════════════════════════════════════════════════════════════
-    # TAB 2 — GLOBAL MARKETS
+    # TAB 2 — MARKET SCANNER
     # ════════════════════════════════════════════════════════════════════════
     with tabs[1]:
+        st.markdown("## 🔍 NSE Market Scanner")
+        st.markdown('<div style="color:#8899aa;font-size:0.85rem;margin-bottom:1rem">'
+                    'Scans 100+ NSE stocks in one click — finds top gainers, losers, volume spikes, and best trade opportunities.</div>',
+                    unsafe_allow_html=True)
+
+        sc1, sc2, sc3 = st.columns([2, 2, 3])
+        with sc1:
+            scan_universe = st.selectbox("Universe", [
+                ("Nifty 50 (~48 stocks, fast)", "nifty50"),
+                ("Nifty 100 (100 stocks)", "nifty100"),
+                ("Full NSE (~110 stocks)", "all"),
+            ], format_func=lambda x: x[0], index=1)[1]
+        with sc2:
+            scan_sort = st.selectbox("Show by", [
+                "Best Opportunities", "Top Gainers", "Top Losers",
+                "Volume Spikes", "Sharp Moves",
+            ])
+        with sc3:
+            run_scan = st.button("🔍  SCAN NSE MARKET NOW", type="primary", use_container_width=True)
+
+        if "scan_result" not in st.session_state:
+            st.session_state.scan_result = None
+        if "scan_time" not in st.session_state:
+            st.session_state.scan_time = None
+
+        if run_scan:
+            progress_placeholder = st.empty()
+            with st.spinner("Scanning NSE market… (15-30 seconds)"):
+                from analysis.market_scanner import scan_market
+                def _prog(msg):
+                    progress_placeholder.info(f"⏳ {msg}")
+                result = scan_market(universe=scan_universe, progress_cb=_prog)
+            progress_placeholder.empty()
+            st.session_state.scan_result = result
+            st.session_state.scan_time   = datetime.now().strftime("%H:%M:%S")
+
+        scan = st.session_state.scan_result
+        if scan and "error" not in scan:
+            meta = scan["meta"]
+
+            # ── Market Breadth ────────────────────────────────────────────────
+            mb = st.columns(5)
+            mb[0].metric("Stocks Scanned",  meta["scanned"])
+            mb[1].metric("Advancing ▲",     meta["advancing"],
+                         delta=f'+{meta["advancing"]}', delta_color="normal")
+            mb[2].metric("Declining ▼",     meta["declining"],
+                         delta=f'-{meta["declining"]}', delta_color="inverse")
+            mb[3].metric("A/D Ratio",
+                         f"{meta['advancing']/max(meta['declining'],1):.2f}",
+                         "Bullish" if meta["advancing"] > meta["declining"] else "Bearish")
+            mb[4].metric("Scan Time",       meta["scan_time"])
+
+            # Market mood
+            a = meta["advancing"]; d = meta["declining"]
+            mood_pct = a / (a + d) * 100 if (a + d) > 0 else 50
+            if mood_pct >= 65:
+                st.success(f"📈 Market Breadth: **BULLISH** — {a} stocks rising vs {d} falling ({mood_pct:.0f}% advancing)")
+            elif mood_pct <= 35:
+                st.error(f"📉 Market Breadth: **BEARISH** — {d} stocks falling vs {a} rising ({100-mood_pct:.0f}% declining)")
+            else:
+                st.warning(f"↔ Market Breadth: **MIXED** — {a} rising, {d} falling")
+
+            st.divider()
+
+            # ── Main Table based on selected sort ─────────────────────────────
+            sort_map = {
+                "Best Opportunities": "opportunities",
+                "Top Gainers":        "gainers",
+                "Top Losers":         "losers",
+                "Volume Spikes":      "volume_leaders",
+                "Sharp Moves":        "sharp_moves",
+            }
+            key = sort_map.get(scan_sort, "opportunities")
+            df_show = scan.get(key, scan["all"])
+
+            # Display columns
+            display_cols = ["Symbol", "Name", "Price", "Change%", "Change",
+                            "Vol Ratio", "ATR%", "Mom5m%", "Signal", "Opp Score"]
+            df_disp = df_show[[c for c in display_cols if c in df_show.columns]]
+
+            def _style_row(row):
+                styles = [""] * len(row)
+                chg_idx = list(row.index).index("Change%") if "Change%" in row.index else -1
+                if chg_idx >= 0:
+                    if row["Change%"] >= 2:
+                        styles[chg_idx] = "color:#00ff88;font-weight:700"
+                    elif row["Change%"] <= -2:
+                        styles[chg_idx] = "color:#ff3366;font-weight:700"
+                return styles
+
+            st.dataframe(
+                df_disp.style.apply(_style_row, axis=1),
+                use_container_width=True, hide_index=True,
+                column_config={
+                    "Change%":  st.column_config.NumberColumn("Chg%",  format="%.2f%%"),
+                    "Change":   st.column_config.NumberColumn("Chg ₹", format="%.2f"),
+                    "Price":    st.column_config.NumberColumn("Price ₹",format="%.2f"),
+                    "Vol Ratio":st.column_config.NumberColumn("Vol Ratio", format="%.2fx"),
+                    "ATR%":     st.column_config.NumberColumn("ATR%",   format="%.2f%%"),
+                    "Mom5m%":   st.column_config.NumberColumn("5m Mom%",format="%.3f%%"),
+                    "Opp Score":st.column_config.ProgressColumn("Opportunity", min_value=0, max_value=100),
+                },
+            )
+
+            # ── Four-panel summary ────────────────────────────────────────────
+            st.divider()
+            p1, p2, p3, p4 = st.columns(4)
+
+            def _mini_table(col, title, df_panel, color):
+                rows_html = ""
+                for _, r in df_panel.head(5).iterrows():
+                    chg = r.get("Change%", 0)
+                    arrow = "▲" if chg >= 0 else "▼"
+                    c = "#00ff88" if chg >= 0 else "#ff3366"
+                    rows_html += (f'<div style="display:flex;justify-content:space-between;'
+                                  f'padding:3px 0;border-bottom:1px solid #1e3a5f">'
+                                  f'<span style="font-weight:700">{r["Symbol"]}</span>'
+                                  f'<span style="color:{c}">{arrow}{abs(chg):.2f}%</span>'
+                                  f'</div>')
+                col.markdown(f'<div class="card" style="border-color:{color}">'
+                             f'<div style="color:{color};font-weight:700;font-size:0.8rem;margin-bottom:0.5rem">{title}</div>'
+                             f'{rows_html}</div>', unsafe_allow_html=True)
+
+            _mini_table(p1, "📈 TOP GAINERS",     scan["gainers"],         "#00ff88")
+            _mini_table(p2, "📉 TOP LOSERS",       scan["losers"],          "#ff3366")
+            _mini_table(p3, "🔥 VOLUME SPIKES",    scan["volume_leaders"],  "#2196f3")
+            _mini_table(p4, "⚡ BEST TRADES",      scan["opportunities"],   "#ffd700")
+
+            # ── Click to analyze ──────────────────────────────────────────────
+            st.divider()
+            all_syms = scan["all"]["Symbol"].tolist()
+            tracked  = [s for s in all_syms if s in bot["syms"]]
+            untracked = [s for s in all_syms if s not in bot["syms"]]
+
+            st.markdown("#### 🎯 Quick Analysis of Top Opportunity")
+            top_pick = scan["opportunities"].iloc[0] if not scan["opportunities"].empty else None
+            if top_pick is not None:
+                tp_sym = top_pick["Symbol"]
+                st.markdown(
+                    f'<div class="card-blue"><b style="font-size:1.1rem">{tp_sym}</b> '
+                    f'<span style="color:{("#00ff88" if top_pick["Change%"]>=0 else "#ff3366")}">'
+                    f'{top_pick["Change%"]:+.2f}%</span> | '
+                    f'Vol Ratio: {top_pick["Vol Ratio"]:.2f}x | '
+                    f'Signal: {top_pick.get("Signal","")}</div>',
+                    unsafe_allow_html=True,
+                )
+                if tp_sym in bot["syms"]:
+                    df_tp = _candles(tp_sym)
+                    if df_tp is not None and not df_tp.empty:
+                        ta_tp  = bot["ta"].full_analysis(df_tp)
+                        sig_tp = bot["eng"].generate_signal(df_tp, tp_sym)
+                        prob_tp = bot["prob"].quick_probability(df_tp, tp_sym)
+                        cc = st.columns(4)
+                        cc[0].metric("Signal",    sig_tp.get("signal","WAIT"))
+                        cc[1].metric("Prob",      f"{prob_tp.get('probability',50):.0f}%")
+                        cc[2].metric("Entry",     f"₹{sig_tp.get('entry',0):,.2f}" if sig_tp.get('entry') else "–")
+                        cc[3].metric("Stop Loss", f"₹{sig_tp.get('stop_loss',0):,.2f}" if sig_tp.get('stop_loss') else "–")
+                else:
+                    st.info(f"{tp_sym} is not in your tracked instruments. "
+                            f"Add it to `config.py` INSTRUMENTS for deep analysis.")
+
+        elif scan and "error" in scan:
+            st.error(f"Scan failed: {scan['error']}")
+            st.info("Market may be closed. Try scanning during 9:15 AM – 3:30 PM IST.")
+        else:
+            st.markdown("""
+<div style="text-align:center;padding:3rem;color:#8899aa">
+  <div style="font-size:3rem">🔍</div>
+  <div style="font-size:1.1rem;margin-top:0.5rem">Click <b style="color:#2196f3">SCAN NSE MARKET NOW</b> to analyse the entire market</div>
+  <div style="font-size:0.85rem;margin-top:0.5rem">Finds stocks with highest movement, volume, and trade potential in one click</div>
+</div>""", unsafe_allow_html=True)
+
+    # ════════════════════════════════════════════════════════════════════════
+    # TAB 3 — GLOBAL MARKETS
+    # ════════════════════════════════════════════════════════════════════════
+    with tabs[2]:
         st.markdown('<div style="color:#8899aa;font-size:0.85em;margin-bottom:12px">*GIFT Nifty: NSE IFSC data not available on yfinance — showing Nifty 50 spot as proxy. For live GIFT Nifty, use NSE/GIFT City portal.</div>',unsafe_allow_html=True)
 
         # India markets
@@ -503,9 +679,9 @@ def main():
             st.markdown(f'<div class="card" style="padding:8px 14px">{sig_g}</div>',unsafe_allow_html=True)
 
     # ════════════════════════════════════════════════════════════════════════
-    # TAB 3 — DEEP ANALYSIS
+    # TAB 4 — DEEP ANALYSIS
     # ════════════════════════════════════════════════════════════════════════
-    with tabs[2]:
+    with tabs[3]:
         df=_candles(symbol)
         if df is None: st.error("No data"); st.stop()
         ta   = bot["ta"].full_analysis(df)
@@ -574,9 +750,9 @@ def main():
             st.plotly_chart(fig2,use_container_width=True,key="factors")
 
     # ════════════════════════════════════════════════════════════════════════
-    # TAB 4 — CLAUDE AI CHAT
+    # TAB 5 — CLAUDE AI CHAT
     # ════════════════════════════════════════════════════════════════════════
-    with tabs[3]:
+    with tabs[4]:
         st.markdown('<h3 style="color:#2196f3">🤖 Claude AI — Trading Intelligence</h3>',unsafe_allow_html=True)
         if "hist" not in st.session_state: st.session_state.hist=[]
         df=_candles(symbol)
@@ -593,6 +769,13 @@ def main():
                  f"Signal:{sig.get('signal')} | Entry:{sig.get('entry')} | SL:{sig.get('stop_loss')} | Targets:{sig.get('targets')} | "
                  f"Prob:{pr.get('probability')}% | Rec:{pr.get('recommendation')} | "
                  f"Expiry:{ex.get('expiry_date')} DTE:{ex.get('dte')} {'EXPIRY DAY' if ex.get('is_expiry') else ''}")
+            # Append NSE scan summary if available
+            if st.session_state.get("scan_result") and "error" not in st.session_state.scan_result:
+                try:
+                    from analysis.market_scanner import get_nse_summary
+                    ctx += "\n" + get_nse_summary(st.session_state.scan_result)
+                except Exception:
+                    pass
 
         # Quick query buttons
         qs=[f"Should I take {symbol} {'call' if 'NIFTY' in symbol else 'buy'} now?",
@@ -625,9 +808,9 @@ def main():
             st.code(ctx)
 
     # ════════════════════════════════════════════════════════════════════════
-    # TAB 5 — PAPER TRADING
+    # TAB 6 — PAPER TRADING
     # ════════════════════════════════════════════════════════════════════════
-    with tabs[4]:
+    with tabs[5]:
         st.markdown('<h3 style="color:#2196f3">📝 Paper Trading</h3>',unsafe_allow_html=True)
         port=bot["paper"].get_portfolio()
         mx=port.get("metrics",{})
@@ -691,9 +874,9 @@ def main():
             st.dataframe(hdf,use_container_width=True,hide_index=True)
 
     # ════════════════════════════════════════════════════════════════════════
-    # TAB 6 — BACKTEST
+    # TAB 7 — BACKTEST
     # ════════════════════════════════════════════════════════════════════════
-    with tabs[5]:
+    with tabs[6]:
         st.markdown('<h3 style="color:#2196f3">📈 Strategy Backtest</h3>',unsafe_allow_html=True)
         bc1,bc2=st.columns([1,3])
         with bc1:

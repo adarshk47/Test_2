@@ -1,6 +1,9 @@
 """
-Universal data fetcher — singleton AngelOne session + yfinance fallback.
-AngelOne session is created ONCE and reused (avoids TOTP expiry issues).
+Universal data fetcher — 3-tier: smartapi-python → AngelOne HTTP → yfinance.
+smartapi-python:  fastest, works locally.
+AngelOne HTTP:    works on Streamlit Cloud where smartapi-python fails to install.
+yfinance:         always works, slightly delayed data.
+AngelOne session created ONCE and reused to avoid TOTP expiry.
 """
 import logging
 import threading
@@ -16,6 +19,7 @@ YFINANCE_SYMBOLS = {
     "SENSEX":    "^BSESN",
     "SBIN":      "SBIN.NS",
     "BANKNIFTY": "^NSEBANK",
+    "NIFTYIT":   "^CNXIT",
 }
 INTERVAL_MAP_YF = {
     "FIVE_MINUTE":    "5m",
@@ -25,7 +29,7 @@ INTERVAL_MAP_YF = {
     "ONE_DAY":        "1d",
 }
 
-# ── Singleton AngelOne session ────────────────────────────────────────────────
+# ── Tier-1: smartapi-python singleton ─────────────────────────────────────────
 _smart       = None
 _login_time: Optional[datetime] = None
 _lock        = threading.Lock()
@@ -33,30 +37,43 @@ _source      = "yfinance"
 
 
 def _login() -> bool:
-    """Create / refresh AngelOne session. Called once; reused for all fetches."""
+    """Try smartapi-python first, then direct HTTP fallback."""
     global _smart, _login_time, _source
+
+    # — Tier 1: smartapi-python —
     try:
         from SmartApi import SmartConnect
         import pyotp
         from config import api_config
-    except ImportError:
-        logger.debug("smartapi-python not installed — will use yfinance")
-        return False
-
-    try:
         cfg  = api_config
         totp = pyotp.TOTP(cfg.totp_secret).now()
         obj  = SmartConnect(api_key=cfg.api_key)
-        data = obj.generateSession(cfg.client_id, cfg.mpin, totp)   # ← mpin not password
+        data = obj.generateSession(cfg.client_id, cfg.mpin, totp)
         if data.get("status"):
             _smart      = obj
             _login_time = datetime.now()
             _source     = "AngelOne"
-            logger.info(f"AngelOne session OK — {cfg.client_id}")
+            logger.info(f"AngelOne (smartapi) OK — {cfg.client_id}")
             return True
-        logger.warning(f"AngelOne login failed: {data.get('message','')}")
+        logger.warning(f"SmartAPI login failed: {data.get('message', '')}")
+    except ImportError:
+        logger.debug("smartapi-python not installed — trying HTTP client")
     except Exception as e:
-        logger.debug(f"AngelOne login error: {e}")
+        logger.debug(f"SmartAPI login error: {e}")
+
+    # — Tier 2: direct HTTP —
+    try:
+        from api.angelone_http import login_http
+        from config import api_config
+        cfg = api_config
+        ok  = login_http(cfg.api_key, cfg.client_id, cfg.mpin, cfg.totp_secret)
+        if ok:
+            _source = "AngelOne"
+            logger.info("AngelOne (HTTP) login OK")
+            return True
+    except Exception as e:
+        logger.debug(f"AngelOne HTTP login error: {e}")
+
     return False
 
 
@@ -66,13 +83,12 @@ def _reset_session():
 
 
 def _get_session():
-    """Return a valid SmartConnect object (re-login if session > 7 h old)."""
+    """Return a valid SmartConnect object or None if unavailable."""
     global _smart, _login_time
     with _lock:
         expired = (
-            _smart is None or
-            _login_time is None or
-            (datetime.now() - _login_time).seconds > 25200   # 7 hours
+            _smart is None or _login_time is None or
+            (datetime.now() - _login_time).seconds > 25200
         )
         if expired:
             _login()
@@ -83,9 +99,10 @@ def get_data_source() -> str:
     return _source
 
 
-# ── AngelOne fetch ────────────────────────────────────────────────────────────
+# ── Tier-1 AngelOne fetch (smartapi) ──────────────────────────────────────────
 
-def fetch_angelone(symbol: str, interval: str = "FIVE_MINUTE", days_back: int = 5) -> Optional[pd.DataFrame]:
+def fetch_angelone(symbol: str, interval: str = "FIVE_MINUTE",
+                   days_back: int = 5) -> Optional[pd.DataFrame]:
     smart = _get_session()
     if smart is None:
         return None
@@ -94,17 +111,13 @@ def fetch_angelone(symbol: str, interval: str = "FIVE_MINUTE", days_back: int = 
         inst = INSTRUMENTS.get(symbol.upper())
         if not inst:
             return None
-
-        now       = datetime.now()
-        to_date   = now.strftime("%Y-%m-%d %H:%M")
-        from_date = (now - timedelta(days=days_back)).strftime("%Y-%m-%d %H:%M")
-
+        now  = datetime.now()
         resp = smart.getCandleData({
             "exchange":    inst["exchange"],
             "symboltoken": inst["token"],
             "interval":    INTERVAL_MAP.get(interval, "FIVE_MINUTE"),
-            "fromdate":    from_date,
-            "todate":      to_date,
+            "fromdate":    (now - timedelta(days=days_back)).strftime("%Y-%m-%d %H:%M"),
+            "todate":      now.strftime("%Y-%m-%d %H:%M"),
         })
         if resp.get("status") and resp.get("data"):
             df = pd.DataFrame(resp["data"],
@@ -113,7 +126,6 @@ def fetch_angelone(symbol: str, interval: str = "FIVE_MINUTE", days_back: int = 
             df = df.set_index("timestamp").sort_index().astype(float)
             logger.info(f"AngelOne: {len(df)} candles — {symbol}")
             return df
-        # Likely session expired
         _reset_session()
     except Exception as e:
         logger.debug(f"AngelOne fetch error ({symbol}): {e}")
@@ -121,13 +133,33 @@ def fetch_angelone(symbol: str, interval: str = "FIVE_MINUTE", days_back: int = 
     return None
 
 
-# ── yfinance fallback ─────────────────────────────────────────────────────────
+# ── Tier-2 AngelOne fetch (direct HTTP) ───────────────────────────────────────
 
-def fetch_yfinance(symbol: str, interval: str = "FIVE_MINUTE", days_back: int = 5) -> Optional[pd.DataFrame]:
+def fetch_angelone_http(symbol: str, interval: str = "FIVE_MINUTE",
+                        days_back: int = 5) -> Optional[pd.DataFrame]:
+    try:
+        from config import INSTRUMENTS, INTERVAL_MAP
+        from api.angelone_http import fetch_candles_http
+        inst = INSTRUMENTS.get(symbol.upper())
+        if not inst:
+            return None
+        df = fetch_candles_http(inst["token"], inst["exchange"],
+                                INTERVAL_MAP.get(interval, "FIVE_MINUTE"), days_back)
+        if df is not None and not df.empty:
+            return df
+    except Exception as e:
+        logger.debug(f"AngelOne HTTP candle fetch error ({symbol}): {e}")
+    return None
+
+
+# ── Tier-3 yfinance fallback ───────────────────────────────────────────────────
+
+def fetch_yfinance(symbol: str, interval: str = "FIVE_MINUTE",
+                   days_back: int = 5) -> Optional[pd.DataFrame]:
     try:
         import yfinance as yf
     except ImportError:
-        logger.error("yfinance not installed: pip install yfinance")
+        logger.error("yfinance not installed")
         return None
 
     yf_sym = YFINANCE_SYMBOLS.get(symbol.upper(), f"{symbol.upper()}.NS")
@@ -150,16 +182,31 @@ def fetch_yfinance(symbol: str, interval: str = "FIVE_MINUTE", days_back: int = 
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def get_candle_data(symbol: str, interval: str = "FIVE_MINUTE", days_back: int = 5) -> Optional[pd.DataFrame]:
-    """AngelOne first → yfinance fallback. Transparent to caller."""
+def get_candle_data(symbol: str, interval: str = "FIVE_MINUTE",
+                    days_back: int = 5) -> Optional[pd.DataFrame]:
+    """smartapi → HTTP → yfinance. Transparent to caller."""
+    global _source
+
+    # Tier 1: smartapi-python
     df = fetch_angelone(symbol, interval, days_back)
     if df is not None and not df.empty:
+        _source = "AngelOne"
         return df
+
+    # Tier 2: direct HTTP (for Streamlit Cloud)
+    df = fetch_angelone_http(symbol, interval, days_back)
+    if df is not None and not df.empty:
+        _source = "AngelOne"
+        return df
+
+    # Tier 3: yfinance
+    _source = "yfinance"
     return fetch_yfinance(symbol, interval, days_back)
 
 
 def get_ltp(symbol: str) -> Optional[float]:
-    """LTP: AngelOne → yfinance 1-min fallback."""
+    """LTP: smartapi → HTTP → yfinance 1-min."""
+    # Tier 1
     smart = _get_session()
     if smart:
         try:
@@ -171,6 +218,20 @@ def get_ltp(symbol: str) -> Optional[float]:
                     return float(resp["data"]["ltp"])
         except Exception:
             pass
+
+    # Tier 2
+    try:
+        from config import INSTRUMENTS
+        from api.angelone_http import fetch_ltp_http
+        inst = INSTRUMENTS.get(symbol.upper())
+        if inst:
+            ltp = fetch_ltp_http(inst["token"], inst["exchange"])
+            if ltp:
+                return ltp
+    except Exception:
+        pass
+
+    # Tier 3
     try:
         import yfinance as yf
         yf_sym = YFINANCE_SYMBOLS.get(symbol.upper(), f"{symbol.upper()}.NS")
