@@ -1,11 +1,10 @@
 """
 Scalper Bot — Streamlit Dashboard
-Run: streamlit run streamlit_app.py
+Run locally : streamlit run streamlit_app.py
+Streamlit Cloud: push to GitHub, connect repo
 """
 import os
-import sys
 import time
-import threading
 from datetime import datetime
 from typing import Dict, Optional
 
@@ -15,693 +14,595 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ── Page config (must be first Streamlit call) ────────────────────────────────
+# ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Scalper Bot",
+    page_title="Scalper Bot 📈",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ── Custom CSS ────────────────────────────────────────────────────────────────
+# ── Dark theme CSS ────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-    .main { background-color: #0d1117; }
-    .stApp { background-color: #0d1117; color: #e6edf3; }
-    .metric-card {
-        background: #161b22;
-        border: 1px solid #30363d;
-        border-radius: 8px;
-        padding: 12px 16px;
-        text-align: center;
-    }
-    .signal-buy { color: #00e676; font-weight: bold; font-size: 1.4em; }
-    .signal-sell { color: #ff1744; font-weight: bold; font-size: 1.4em; }
-    .signal-wait { color: #ffeb3b; font-weight: bold; font-size: 1.4em; }
-    .prob-high { color: #00e676; font-size: 1.8em; font-weight: bold; }
-    .prob-mid  { color: #ffeb3b; font-size: 1.8em; font-weight: bold; }
-    .prob-low  { color: #ff1744; font-size: 1.8em; font-weight: bold; }
-    div[data-testid="stMetricValue"] { color: #e6edf3; }
-    .stButton > button {
-        background: #21262d;
-        color: #e6edf3;
-        border: 1px solid #30363d;
-        border-radius: 6px;
-    }
-    .stButton > button:hover { background: #30363d; border-color: #58a6ff; }
-    .chat-user { background: #1f2937; border-radius: 8px; padding: 10px; margin: 4px 0; }
-    .chat-bot  { background: #0d2137; border-left: 3px solid #58a6ff; border-radius: 8px; padding: 10px; margin: 4px 0; }
-    .stTabs [data-baseweb="tab"] { background: #161b22; color: #8b949e; }
-    .stTabs [aria-selected="true"] { color: #58a6ff; border-bottom: 2px solid #58a6ff; }
+[data-testid="stAppViewContainer"] { background: #0d1117; color: #e6edf3; }
+[data-testid="stSidebar"]          { background: #161b22; }
+[data-testid="stHeader"]           { background: transparent; }
+.metric-box {
+    background: #161b22; border: 1px solid #30363d;
+    border-radius: 8px; padding: 12px; text-align: center; margin: 4px;
+}
+.signal-BUY  { color: #00e676; font-size: 1.6em; font-weight: 900; }
+.signal-SELL { color: #ff1744; font-size: 1.6em; font-weight: 900; }
+.signal-WAIT { color: #ffeb3b; font-size: 1.6em; font-weight: 900; }
+.prob-hi { color: #00e676; font-size: 2em; font-weight: 900; }
+.prob-md { color: #ffeb3b; font-size: 2em; font-weight: 900; }
+.prob-lo { color: #ff1744; font-size: 2em; font-weight: 900; }
+.chat-user { background:#1f2937; border-radius:8px; padding:10px; margin:4px 0; }
+.chat-bot  { background:#0d2137; border-left:3px solid #58a6ff; border-radius:8px; padding:10px; margin:4px 0; }
+div[data-testid="stMetricValue"] > div { color: #e6edf3 !important; }
+hr { border-color: #30363d; }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ── Lazy imports with error handling ─────────────────────────────────────────
-@st.cache_resource
-def load_bot_components():
-    try:
-        from api.angelone import AngelOneAPI
-        from analysis.technical import TechnicalAnalysis
-        from analysis.volatility import VolatilityAnalysis
-        from analysis.volume import VolumeAnalysis
-        from analysis.expiry import ExpiryAnalysis
-        from trading.probability import ProbabilityCalculator
-        from trading.scalping import ScalpingEngine
-        from trading.paper_trading import PaperTradingDashboard
-        from database.db_manager import DatabaseManager
-        from config import INSTRUMENTS
+# ── Cached initialisation ─────────────────────────────────────────────────────
+@st.cache_resource(show_spinner="Initialising bot components...")
+def init_components():
+    from analysis.technical import TechnicalAnalysis
+    from analysis.volatility import VolatilityAnalysis
+    from analysis.volume import VolumeAnalysis
+    from analysis.expiry import ExpiryAnalysis
+    from trading.probability import ProbabilityCalculator
+    from trading.scalping import ScalpingEngine
+    from trading.paper_trading import PaperTradingDashboard
+    from database.db_manager import DatabaseManager
+    from config import INSTRUMENTS
 
-        api = AngelOneAPI()
-        connected = api.connect()
-        db = DatabaseManager()
-        return {
-            "api": api,
-            "connected": connected,
-            "ta": TechnicalAnalysis(),
-            "va": VolatilityAnalysis(),
-            "vola": VolumeAnalysis(),
-            "ea": ExpiryAnalysis(),
-            "prob": ProbabilityCalculator(),
-            "engine": ScalpingEngine(),
-            "paper": PaperTradingDashboard(db),
-            "db": db,
-            "instruments": list(INSTRUMENTS.keys()),
-        }
-    except Exception as e:
-        st.error(f"Bot init error: {e}")
-        return None
+    db = DatabaseManager()
+    return {
+        "ta":    TechnicalAnalysis(),
+        "va":    VolatilityAnalysis(),
+        "vola":  VolumeAnalysis(),
+        "ea":    ExpiryAnalysis(),
+        "prob":  ProbabilityCalculator(),
+        "eng":   ScalpingEngine(),
+        "paper": PaperTradingDashboard(db),
+        "db":    db,
+        "syms":  list(INSTRUMENTS.keys()),
+    }
 
 
-@st.cache_data(ttl=10)
-def fetch_data(symbol: str, _api) -> Optional[pd.DataFrame]:
-    """Fetch candle data — cached 10 seconds."""
-    try:
-        if _api and _api.connected:
-            df = _api.get_candle_data(symbol, days_back=5)
-            if df is not None and not df.empty:
-                return df
-    except Exception:
-        pass
-    try:
-        from database.db_manager import DatabaseManager
-        db = DatabaseManager()
-        cached = db.get_cached_candles(symbol, "FIVE_MINUTE", 200)
-        if cached:
-            df = pd.DataFrame(cached)
-            df["timestamp"] = pd.to_datetime(df["timestamp"])
-            df = df.set_index("timestamp").sort_index()
-            return df[["open", "high", "low", "close", "volume"]].astype(float)
-    except Exception:
-        pass
-    return None
+@st.cache_data(ttl=30, show_spinner=False)
+def load_data(symbol: str) -> Optional[pd.DataFrame]:
+    """30-second cache; tries AngelOne then yfinance automatically."""
+    from api.data_fetcher import get_candle_data
+    return get_candle_data(symbol, "FIVE_MINUTE", days_back=5)
 
 
-def make_candlestick(df: pd.DataFrame, symbol: str, ta) -> "go.Figure":
+@st.cache_data(ttl=15, show_spinner=False)
+def load_ltp(symbol: str) -> Optional[float]:
+    from api.data_fetcher import get_ltp
+    return get_ltp(symbol)
+
+
+# ── Chart builder ─────────────────────────────────────────────────────────────
+def build_chart(df: pd.DataFrame, symbol: str, ta) -> "go.Figure":
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 
     fig = make_subplots(
-        rows=3, cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.02,
-        row_heights=[0.60, 0.20, 0.20],
+        rows=3, cols=1, shared_xaxes=True,
+        vertical_spacing=0.02, row_heights=[0.60, 0.20, 0.20],
     )
 
+    # Candles
     fig.add_trace(go.Candlestick(
         x=df.index, open=df["open"], high=df["high"],
         low=df["low"], close=df["close"], name=symbol,
         increasing_line_color="#00e676", decreasing_line_color="#ff1744",
     ), row=1, col=1)
 
-    bb_upper, bb_mid, bb_lower = ta.bollinger_bands(df["close"])
-    fig.add_trace(go.Scatter(x=df.index, y=bb_upper, line=dict(color="rgba(100,181,246,0.4)", width=1), name="BB U", showlegend=False), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=bb_lower, line=dict(color="rgba(100,181,246,0.4)", width=1), name="BB L", fill="tonexty", fillcolor="rgba(100,181,246,0.05)", showlegend=False), row=1, col=1)
+    # Bollinger Bands
+    bb_u, bb_m, bb_l = ta.bollinger_bands(df["close"])
+    fig.add_trace(go.Scatter(x=df.index, y=bb_u, line=dict(color="rgba(100,181,246,.35)", width=1), showlegend=False), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=bb_l, line=dict(color="rgba(100,181,246,.35)", width=1), fill="tonexty", fillcolor="rgba(100,181,246,.05)", showlegend=False), row=1, col=1)
 
-    ema9 = ta.ema(df["close"], 9)
-    ema21 = ta.ema(df["close"], 21)
-    fig.add_trace(go.Scatter(x=df.index, y=ema9, line=dict(color="#ffeb3b", width=1), name="EMA9"), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=ema21, line=dict(color="#ff9800", width=1), name="EMA21"), row=1, col=1)
+    # EMAs + VWAP
+    fig.add_trace(go.Scatter(x=df.index, y=ta.ema(df["close"], 9),  line=dict(color="#ffeb3b", width=1), name="EMA9"),  row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=ta.ema(df["close"], 21), line=dict(color="#ff9800", width=1), name="EMA21"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=ta.vwap(df), line=dict(color="#e040fb", width=1.5, dash="dot"), name="VWAP"), row=1, col=1)
 
-    vwap = ta.vwap(df)
-    fig.add_trace(go.Scatter(x=df.index, y=vwap, line=dict(color="#e040fb", width=1.5, dash="dot"), name="VWAP"), row=1, col=1)
+    # Volume
+    vol_colors = ["#00e676" if c >= o else "#ff1744" for c, o in zip(df["close"], df["open"])]
+    fig.add_trace(go.Bar(x=df.index, y=df["volume"], marker_color=vol_colors, opacity=0.35, name="Vol"), row=1, col=1)
 
-    colors = ["#00e676" if c >= o else "#ff1744" for c, o in zip(df["close"], df["open"])]
-    fig.add_trace(go.Bar(x=df.index, y=df["volume"], marker_color=colors, opacity=0.4, name="Vol"), row=1, col=1)
-
+    # RSI
     rsi = ta.rsi(df["close"])
     fig.add_trace(go.Scatter(x=df.index, y=rsi, line=dict(color="#64b5f6", width=1.5), name="RSI"), row=2, col=1)
-    for y, c in [(70, "#ff1744"), (30, "#00e676"), (50, "gray")]:
-        fig.add_hline(y=y, line_dash="dot", line_color=c, opacity=0.4, row=2, col=1)
+    for lvl, col in [(70, "#ff1744"), (30, "#00e676"), (50, "gray")]:
+        fig.add_hline(y=lvl, line_dash="dot", line_color=col, opacity=0.4, row=2, col=1)
 
-    macd_l, sig_l, hist = ta.macd(df["close"])
-    hist_colors = ["#00e676" if v >= 0 else "#ff1744" for v in hist]
-    fig.add_trace(go.Bar(x=df.index, y=hist, marker_color=hist_colors, opacity=0.7, name="Hist"), row=3, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=macd_l, line=dict(color="#64b5f6", width=1.5), name="MACD"), row=3, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=sig_l, line=dict(color="#ff9800", width=1.5), name="Signal"), row=3, col=1)
+    # MACD
+    ml, sl_line, hist = ta.macd(df["close"])
+    hcol = ["#00e676" if v >= 0 else "#ff1744" for v in hist]
+    fig.add_trace(go.Bar(x=df.index, y=hist, marker_color=hcol, opacity=0.7, name="Hist"), row=3, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=ml,      line=dict(color="#64b5f6", width=1.5), name="MACD"),   row=3, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=sl_line, line=dict(color="#ff9800", width=1.5), name="Signal"), row=3, col=1)
 
     fig.update_layout(
-        template="plotly_dark",
-        paper_bgcolor="#0d1117",
-        plot_bgcolor="#161b22",
-        xaxis_rangeslider_visible=False,
-        height=550,
-        margin=dict(l=40, r=20, t=30, b=20),
-        legend=dict(orientation="h", y=1.02, x=0, bgcolor="rgba(0,0,0,0)"),
+        template="plotly_dark", paper_bgcolor="#0d1117", plot_bgcolor="#161b22",
+        xaxis_rangeslider_visible=False, height=560,
+        margin=dict(l=40, r=10, t=30, b=20),
+        legend=dict(orientation="h", y=1.02, bgcolor="rgba(0,0,0,0)"),
+        font=dict(color="#e6edf3"),
     )
     fig.update_xaxes(showgrid=True, gridcolor="#21262d")
     fig.update_yaxes(showgrid=True, gridcolor="#21262d")
     return fig
 
 
-def prob_color_class(p: float) -> str:
-    if p >= 65:
-        return "prob-high"
-    if p >= 50:
-        return "prob-mid"
-    return "prob-low"
-
-
-def signal_class(sig: str) -> str:
-    return {"BUY": "signal-buy", "SELL": "signal-sell"}.get(sig, "signal-wait")
-
-
-# ── Claude AI helper ─────────────────────────────────────────────────────────
+# ── Claude AI ─────────────────────────────────────────────────────────────────
 def ask_claude(query: str, context: str) -> str:
     api_key = os.getenv("ANTHROPIC_API_KEY", "")
     if not api_key:
-        return "Anthropic API key not set in .env"
+        return "⚠️ Anthropic API key not set. Add ANTHROPIC_API_KEY to .env or Streamlit secrets."
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
-        system = """You are an expert intraday scalping trader specializing in NSE/BSE Indian markets.
-You analyze NIFTY50, BANKNIFTY, SENSEX, and individual stocks for 5-minute scalping opportunities.
-You answer in a concise, trader-friendly style. Give specific entry/exit levels when asked.
-Always mention: probability of success, entry level, target, stop loss, and key risks.
-Be direct and actionable. Use Indian market context (NSE, BSE, F&O, expiry days)."""
-
-        message = client.messages.create(
+        msg = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=800,
-            system=system,
-            messages=[{"role": "user", "content": f"Market Context:\n{context}\n\nTrader Query: {query}"}],
+            system="""You are an expert intraday scalping trader for NSE/BSE Indian markets.
+Specialise in NIFTY50, BANKNIFTY, SENSEX and large-cap stocks on 5-minute candles.
+Give concise, actionable answers with: probability %, entry level, target, stop loss, key risk.
+Use Indian market context (F&O, expiry, NSE/BSE). Be direct — no disclaimers.""",
+            messages=[{"role": "user", "content": f"Live Market Data:\n{context}\n\nQuery: {query}"}],
         )
-        return message.content[0].text
+        return msg.content[0].text
     except ImportError:
-        return "anthropic package not installed. Run: pip install anthropic"
+        return "anthropic package missing. Run: pip install anthropic"
     except Exception as e:
-        return f"Claude API error: {e}"
+        return f"Claude error: {e}"
 
 
-# ── Main App ─────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def pcolor(p: float) -> str:
+    return "prob-hi" if p >= 65 else "prob-md" if p >= 50 else "prob-lo"
+
+
+def market_status() -> tuple[bool, int]:
+    from utils.helpers import is_market_hours, time_to_close
+    return is_market_hours(), time_to_close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  MAIN APP
+# ══════════════════════════════════════════════════════════════════════════════
 def main():
-    bot = load_bot_components()
+    bot = init_components()
 
-    # Sidebar
+    # ── Sidebar ───────────────────────────────────────────────────────────────
     with st.sidebar:
         st.markdown("## 📈 Scalper Bot")
-        st.markdown(f"**{datetime.now().strftime('%d %b %Y  %H:%M:%S')}**")
+        st.caption(datetime.now().strftime("%d %b %Y  %H:%M:%S"))
 
-        from utils.helpers import is_market_hours, time_to_close
-        if is_market_hours():
-            st.success("Market: OPEN")
-            st.caption(f"Time to close: {time_to_close()} min")
+        mkt_open, ttc = market_status()
+        if mkt_open:
+            st.success(f"🟢 Market OPEN  |  {ttc} min left")
         else:
-            st.error("Market: CLOSED")
+            st.error("🔴 Market CLOSED")
 
-        if bot:
-            st.success("AngelOne: Connected" if bot["connected"] else "AngelOne: Offline")
+        st.info("Data: yfinance (NSE/BSE live)", icon="📡")
+
+        symbol = st.selectbox("Instrument", bot["syms"], index=0)
+
+        col_r, col_a = st.columns(2)
+        with col_r:
+            if st.button("🔄 Refresh", use_container_width=True):
+                st.cache_data.clear()
+                st.rerun()
+        with col_a:
+            auto = st.toggle("Auto 30s")
+
         st.divider()
+        st.caption("⚠️ Educational use only — not financial advice.")
 
-        symbol = st.selectbox("Instrument", bot["instruments"] if bot else ["NIFTY50", "SBIN", "BANKNIFTY", "SENSEX"], index=0)
-        auto_refresh = st.toggle("Auto Refresh (5s)", value=False)
-        if st.button("🔄 Refresh Now"):
-            st.cache_data.clear()
-            st.rerun()
-
-        st.divider()
-        st.caption("⚠️ For educational use only. Not financial advice.")
-
-    if not bot:
-        st.error("Bot components failed to load. Check requirements.")
-        return
-
-    # Auto-refresh
-    if auto_refresh:
-        time.sleep(5)
+    if auto:
+        time.sleep(30)
         st.cache_data.clear()
         st.rerun()
 
-    # Tabs
-    tab_live, tab_analysis, tab_ai, tab_paper, tab_backtest = st.tabs([
-        "📊 Live Dashboard", "🔬 Deep Analysis", "🤖 Claude AI", "📝 Paper Trading", "📈 Backtest"
+    # ── Tabs ──────────────────────────────────────────────────────────────────
+    t1, t2, t3, t4, t5 = st.tabs([
+        "📊 Live Dashboard", "🔬 Deep Analysis",
+        "🤖 Claude AI", "📝 Paper Trading", "📈 Backtest",
     ])
 
-    # ── TAB 1: LIVE DASHBOARD ────────────────────────────────────────────────
-    with tab_live:
-        df = fetch_data(symbol, bot["api"])
+    # ════════════════════════════════════════════════════════
+    #  TAB 1 — LIVE DASHBOARD
+    # ════════════════════════════════════════════════════════
+    with t1:
+        df = load_data(symbol)
         if df is None or df.empty:
-            st.warning(f"No data for {symbol}. Check API credentials or internet connection.")
+            st.warning(f"No data for **{symbol}**. Market may be closed or yfinance unavailable.")
             st.stop()
 
-        ta_data = bot["ta"].full_analysis(df)
-        sig = bot["engine"].generate_signal(df, symbol)
+        ta   = bot["ta"].full_analysis(df)
+        sig  = bot["eng"].generate_signal(df, symbol)
         prob = bot["prob"].quick_probability(df, symbol)
-        expiry = bot["ea"].expiry_volatility_pattern(symbol.replace("50", ""))
+        exp  = bot["ea"].expiry_volatility_pattern(symbol.replace("50", ""))
 
-        # Top metrics row
-        col1, col2, col3, col4, col5, col6 = st.columns(6)
-        price = ta_data.get("price", 0)
-        atr = ta_data.get("atr", 0)
-        rsi = ta_data.get("rsi", 0)
-        vwap = ta_data.get("vwap", 0)
-        p = prob.get("probability", 50)
-        sig_type = sig.get("signal", "WAIT")
+        # ── KPI row ──────────────────────────────────────────
+        k1, k2, k3, k4, k5, k6 = st.columns(6)
+        price = ta.get("price", 0)
+        rsi   = ta.get("rsi", 0)
+        atr   = ta.get("atr", 0)
+        vwap  = ta.get("vwap", 0)
+        p     = prob.get("probability", 50)
 
-        col1.metric("Price", f"{price:,.2f}", delta=f"ATR {atr:.1f}")
-        col2.metric("RSI (14)", f"{rsi:.1f}", delta="Oversold" if rsi < 30 else ("Overbought" if rsi > 70 else "Neutral"))
-        col3.metric("VWAP", f"{vwap:,.2f}", delta="Above" if ta_data.get("above_vwap") else "Below")
-        col4.metric("Trend", ta_data.get("trend", ""), delta=ta_data.get("structure", ""))
-        col5.metric("Entry Prob", f"{p:.0f}%")
-        col6.metric("Signal", sig_type)
+        k1.metric("💰 Price",    f"{price:,.2f}",  delta=f"ATR {atr:.1f}")
+        k2.metric("📊 RSI",      f"{rsi:.1f}",     delta="Oversold" if rsi < 30 else "Overbought" if rsi > 70 else "Neutral")
+        k3.metric("〰️ VWAP",    f"{vwap:,.2f}",   delta="Above" if ta.get("above_vwap") else "Below")
+        k4.metric("📈 Trend",    ta.get("trend", "—"),  delta=ta.get("structure", ""))
+        k5.metric("🎯 Prob",     f"{p:.0f}%")
+        k6.metric("⚡ Signal",   sig.get("signal", "WAIT"))
 
         st.divider()
 
-        # Chart + Signal side by side
-        chart_col, sig_col = st.columns([3, 1])
-        with chart_col:
+        # ── Chart + Signal panel ──────────────────────────────
+        ch_col, sp_col = st.columns([3, 1])
+
+        with ch_col:
             try:
-                fig = make_candlestick(df.tail(100), symbol, bot["ta"])
-                st.plotly_chart(fig, use_container_width=True, key="main_chart")
+                fig = build_chart(df.tail(120), symbol, bot["ta"])
+                st.plotly_chart(fig, use_container_width=True, key="c1")
             except Exception as e:
                 st.error(f"Chart error: {e}")
 
-        with sig_col:
-            st.markdown(f"### Signal")
-            st.markdown(f'<div class="{signal_class(sig_type)}">{sig_type}</div>', unsafe_allow_html=True)
-            st.caption(f"Quality: **{sig.get('quality', '')}**")
+        with sp_col:
+            sig_type = sig.get("signal", "WAIT")
+            st.markdown(f'<div class="signal-{sig_type}">{sig_type}</div>', unsafe_allow_html=True)
+            st.caption(f"Quality: **{sig.get('quality','')}**")
+            st.markdown("---")
 
             if sig.get("entry"):
                 st.metric("Entry", f"{sig['entry']:,.2f}")
             if sig.get("stop_loss"):
-                st.metric("Stop Loss", f"{sig['stop_loss']:,.2f}", delta=f"-{abs(sig['entry'] - sig['stop_loss']):.1f}", delta_color="inverse")
+                sl_diff = abs(sig['entry'] - sig['stop_loss'])
+                st.metric("Stop Loss", f"{sig['stop_loss']:,.2f}", delta=f"-{sl_diff:.1f}", delta_color="inverse")
             targets = sig.get("targets", [])
             if targets:
-                st.markdown("**Targets**")
                 for i, t in enumerate(targets, 1):
-                    st.metric(f"T{i}", f"{t:,.2f}", delta=f"+{abs(t - sig['entry']):.1f}")
+                    st.metric(f"Target {i}", f"{t:,.2f}", delta=f"+{abs(t - sig['entry']):.1f}")
+            rr = sig.get("risk_reward", 0)
+            if rr:
+                color = "green" if rr >= 1.5 else "orange"
+                st.markdown(f"R/R: **:{color}[{rr}]**")
 
-            if sig.get("risk_reward"):
-                color = "green" if sig["risk_reward"] >= 2 else "orange"
-                st.markdown(f"R/R: **:{color}[{sig['risk_reward']}]**")
+            st.markdown("---")
+            st.markdown(f'<div class="{pcolor(p)}">{p:.0f}%</div>', unsafe_allow_html=True)
+            st.caption(f"Buy: {prob.get('buy_probability',0):.0f}%  |  Sell: {prob.get('sell_probability',0):.0f}%")
+            st.caption(f"**{prob.get('recommendation','')}**")
 
-            st.divider()
-            st.markdown(f"**Probability**")
-            st.markdown(f'<div class="{prob_color_class(p)}">{p:.0f}%</div>', unsafe_allow_html=True)
-            st.caption(f"Buy: {prob.get('buy_probability', 0):.0f}%  |  Sell: {prob.get('sell_probability', 0):.0f}%")
-            st.caption(f"Recommendation: **{prob.get('recommendation', '')}**")
-
-            if expiry.get("is_expiry"):
+            if exp.get("is_expiry"):
                 st.warning("🔥 EXPIRY DAY")
-                st.caption(expiry.get("phase_pattern", ""))
+                st.caption(f"Targets: {exp.get('recommended_targets','')}")
 
-        # Warnings
+        # ── Warnings ──────────────────────────────────────────
         for w in sig.get("time_warnings", []):
             st.warning(w)
 
-        # Expiry bar
-        with st.expander(f"📅 Expiry Info — DTE: {expiry.get('dte', 0)} | {expiry.get('expiry_date', '')}"):
-            ec1, ec2, ec3, ec4 = st.columns(4)
-            ec1.metric("Days to Expiry", expiry.get("dte", ""))
-            ec2.metric("Target Multiplier", f"{expiry.get('target_multiplier', 1)}x")
-            ec3.metric("IV Crush Risk", expiry.get("iv_crush_risk", ""))
-            ec4.metric("Targets", expiry.get("recommended_targets", ""))
-            st.caption(expiry.get("phase_pattern", ""))
+        # ── Expiry strip ──────────────────────────────────────
+        with st.expander(f"📅 Expiry  |  DTE {exp.get('dte',0)}  |  {exp.get('expiry_date','')}"):
+            e1, e2, e3, e4 = st.columns(4)
+            e1.metric("DTE",          exp.get("dte", ""))
+            e2.metric("Multiplier",   f"{exp.get('target_multiplier',1)}x")
+            e3.metric("IV Crush",     exp.get("iv_crush_risk", ""))
+            e4.metric("Targets",      exp.get("recommended_targets", ""))
+            st.caption(exp.get("phase_pattern", ""))
 
-        # Market scan
+        # ── Market scan ───────────────────────────────────────
         with st.expander("🔍 Market Scan — All Instruments"):
-            scan_data = []
-            for sym_scan in bot["instruments"]:
-                df_s = fetch_data(sym_scan, bot["api"])
+            rows = []
+            for sym in bot["syms"]:
+                df_s = load_data(sym)
                 if df_s is not None and len(df_s) >= 30:
-                    s = bot["engine"].generate_signal(df_s, sym_scan)
+                    s = bot["eng"].generate_signal(df_s, sym)
                     ta_s = s.get("ta", {})
-                    scan_data.append({
-                        "Symbol": sym_scan,
-                        "Signal": s.get("signal", "WAIT"),
+                    rows.append({
+                        "Symbol": sym, "Signal": s.get("signal", "WAIT"),
                         "Quality": s.get("quality", ""),
                         "Entry": s.get("entry", ""),
                         "T1": s.get("targets", [""])[0] if s.get("targets") else "",
-                        "SL": s.get("stop_loss", ""),
-                        "R/R": s.get("risk_reward", ""),
-                        "RSI": ta_s.get("rsi", ""),
-                        "Trend": ta_s.get("trend", ""),
+                        "SL": s.get("stop_loss", ""), "R/R": s.get("risk_reward", ""),
+                        "RSI": round(ta_s.get("rsi", 0), 1), "Trend": ta_s.get("trend", ""),
                     })
-            if scan_data:
-                scan_df = pd.DataFrame(scan_data)
+            if rows:
+                scan_df = pd.DataFrame(rows)
+                st.dataframe(scan_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("Fetching scan data...")
 
-                def color_signal(val):
-                    if val == "BUY":
-                        return "color: #00e676; font-weight: bold"
-                    if val == "SELL":
-                        return "color: #ff1744; font-weight: bold"
-                    return "color: #ffeb3b"
-
-                st.dataframe(
-                    scan_df.style.applymap(color_signal, subset=["Signal"]),
-                    use_container_width=True,
-                    hide_index=True,
-                )
-
-    # ── TAB 2: DEEP ANALYSIS ─────────────────────────────────────────────────
-    with tab_analysis:
-        df = fetch_data(symbol, bot["api"])
+    # ════════════════════════════════════════════════════════
+    #  TAB 2 — DEEP ANALYSIS
+    # ════════════════════════════════════════════════════════
+    with t2:
+        df = load_data(symbol)
         if df is None:
-            st.warning("No data available")
+            st.warning("No data")
             st.stop()
 
-        st.subheader(f"Deep Analysis — {symbol}")
+        st.subheader(f"🔬 Deep Analysis — {symbol}")
+        ta   = bot["ta"].full_analysis(df)
+        vold = bot["va"].full_analysis(df)
+        volm = bot["vola"].full_analysis(df)
 
-        a_col1, a_col2 = st.columns(2)
-        ta_data = bot["ta"].full_analysis(df)
-        vol_data = bot["va"].full_analysis(df)
-        vol_ana = bot["vola"].full_analysis(df)
+        dc1, dc2 = st.columns(2)
 
-        with a_col1:
+        with dc1:
             st.markdown("#### Technical Indicators")
-            ta_df = pd.DataFrame([
-                {"Indicator": "RSI (14)", "Value": ta_data.get("rsi", ""), "Signal": ta_data.get("rsi_signal", "")},
-                {"Indicator": "MACD", "Value": ta_data.get("macd", ""), "Signal": ta_data.get("macd_signal_str", "")},
-                {"Indicator": "BB Position", "Value": f"{ta_data.get('bb_position_pct', 0):.1f}%", "Signal": ""},
-                {"Indicator": "BB Upper", "Value": ta_data.get("bb_upper", ""), "Signal": ""},
-                {"Indicator": "BB Lower", "Value": ta_data.get("bb_lower", ""), "Signal": ""},
-                {"Indicator": "VWAP", "Value": ta_data.get("vwap", ""), "Signal": "Above" if ta_data.get("above_vwap") else "Below"},
-                {"Indicator": "ATR", "Value": ta_data.get("atr", ""), "Signal": ""},
-                {"Indicator": "Trend", "Value": ta_data.get("trend", ""), "Signal": ta_data.get("structure", "")},
-                {"Indicator": "EMA 9", "Value": ta_data.get("ema9", ""), "Signal": ""},
-                {"Indicator": "EMA 21", "Value": ta_data.get("ema21", ""), "Signal": ""},
-            ])
-            st.dataframe(ta_df, use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame([
+                {"Indicator": "RSI (14)",       "Value": ta.get("rsi",""),      "Signal": ta.get("rsi_signal","")},
+                {"Indicator": "MACD",           "Value": ta.get("macd",""),     "Signal": ta.get("macd_signal_str","")},
+                {"Indicator": "BB Upper",       "Value": ta.get("bb_upper",""), "Signal": ""},
+                {"Indicator": "BB Lower",       "Value": ta.get("bb_lower",""), "Signal": ""},
+                {"Indicator": "BB Position",    "Value": f"{ta.get('bb_position_pct',0):.1f}%", "Signal": ""},
+                {"Indicator": "VWAP",           "Value": ta.get("vwap",""),     "Signal": "Above" if ta.get("above_vwap") else "Below"},
+                {"Indicator": "ATR",            "Value": ta.get("atr",""),      "Signal": ""},
+                {"Indicator": "Trend",          "Value": ta.get("trend",""),    "Signal": ta.get("structure","")},
+                {"Indicator": "EMA 9",          "Value": ta.get("ema9",""),     "Signal": ""},
+                {"Indicator": "EMA 21",         "Value": ta.get("ema21",""),    "Signal": ""},
+            ]), use_container_width=True, hide_index=True)
 
             st.markdown("#### Support & Resistance")
-            s_r_col1, s_r_col2 = st.columns(2)
-            with s_r_col1:
-                st.markdown("**Resistance**")
-                for r in ta_data.get("resistance", []):
-                    st.markdown(f"🔴 `{r}`")
-            with s_r_col2:
-                st.markdown("**Support**")
-                for s in ta_data.get("support", []):
-                    st.markdown(f"🟢 `{s}`")
+            sc1, sc2 = st.columns(2)
+            with sc1:
+                st.markdown("**🔴 Resistance**")
+                for r in ta.get("resistance", []):
+                    st.code(str(r))
+            with sc2:
+                st.markdown("**🟢 Support**")
+                for s in ta.get("support", []):
+                    st.code(str(s))
 
-        with a_col2:
-            st.markdown("#### Volatility Analysis")
-            vol_df = pd.DataFrame([
-                {"Metric": "HV 5-day", "Value": f"{vol_data.get('hv_5day', 0)}%"},
-                {"Metric": "HV 20-day", "Value": f"{vol_data.get('hv_20day', 0)}%"},
-                {"Metric": "HV 50-day", "Value": f"{vol_data.get('hv_50day', 0)}%"},
-                {"Metric": "Vol Regime", "Value": vol_data.get("vol_regime", "")},
-                {"Metric": "ATR T1 ↑", "Value": vol_data.get("t1_up", "")},
-                {"Metric": "ATR T2 ↑", "Value": vol_data.get("t2_up", "")},
-                {"Metric": "ATR T1 ↓", "Value": vol_data.get("t1_dn", "")},
-            ])
-            st.dataframe(vol_df, use_container_width=True, hide_index=True)
+        with dc2:
+            st.markdown("#### Volatility")
+            st.dataframe(pd.DataFrame([
+                {"Metric": "HV 5-day",    "Value": f"{vold.get('hv_5day',0)}%"},
+                {"Metric": "HV 20-day",   "Value": f"{vold.get('hv_20day',0)}%"},
+                {"Metric": "Vol Regime",  "Value": vold.get("vol_regime","")},
+                {"Metric": "ATR T1 ↑",    "Value": vold.get("t1_up","")},
+                {"Metric": "ATR T2 ↑",    "Value": vold.get("t2_up","")},
+                {"Metric": "ATR T1 ↓",    "Value": vold.get("t1_dn","")},
+                {"Metric": "ATR T2 ↓",    "Value": vold.get("t2_dn","")},
+            ]), use_container_width=True, hide_index=True)
 
             st.markdown("#### Volume & Momentum")
-            vol_m_df = pd.DataFrame([
-                {"Metric": "VWAP", "Value": vol_ana.get("vwap", "")},
-                {"Metric": "Relative Volume", "Value": vol_ana.get("relative_volume", "")},
-                {"Metric": "Volume Signal", "Value": vol_ana.get("volume_signal", "")},
-                {"Metric": "Momentum %", "Value": f"{vol_ana.get('roc_pct', 0):.4f}%"},
-                {"Metric": "Momentum Signal", "Value": vol_ana.get("momentum_signal", "")},
-                {"Metric": "Divergence", "Value": vol_ana.get("divergence", "")},
-            ])
-            st.dataframe(vol_m_df, use_container_width=True, hide_index=True)
+            vp = volm.get("volume_profile", {})
+            st.dataframe(pd.DataFrame([
+                {"Metric": "VWAP",          "Value": volm.get("vwap","")},
+                {"Metric": "Rel. Volume",   "Value": volm.get("relative_volume","")},
+                {"Metric": "Vol Signal",    "Value": volm.get("volume_signal","")},
+                {"Metric": "Momentum %",    "Value": f"{volm.get('roc_pct',0):.3f}%"},
+                {"Metric": "Mom Signal",    "Value": volm.get("momentum_signal","")},
+                {"Metric": "Divergence",    "Value": volm.get("divergence","")},
+                {"Metric": "POC",           "Value": vp.get("poc","") if isinstance(vp,dict) else ""},
+            ]), use_container_width=True, hide_index=True)
 
-            vp = vol_ana.get("volume_profile", {})
-            if isinstance(vp, dict):
-                poc = vp.get("poc")
-                hvn = vp.get("high_volume_nodes", [])
-                lvn = vp.get("low_volume_nodes", [])
-                if poc:
-                    st.metric("Point of Control (POC)", poc)
-                if hvn:
-                    st.caption(f"High Volume Nodes: {hvn}")
-                if lvn:
-                    st.caption(f"Low Volume Nodes (weak areas): {lvn}")
-
-        # Probability factor breakdown
-        st.markdown("#### Probability Factor Breakdown")
+        # Probability breakdown bar chart
+        st.markdown("#### Trade Probability Factor Breakdown")
         prob = bot["prob"].quick_probability(df, symbol)
         factors = prob.get("factor_breakdown", {})
         if factors:
             import plotly.graph_objects as go
-            fig_prob = go.Figure(go.Bar(
+            bar_fig = go.Figure(go.Bar(
                 x=list(factors.values()),
-                y=[k.replace("_score", "").replace("_", " ").title() for k in factors],
+                y=[k.replace("_score","").replace("_"," ").title() for k in factors],
                 orientation="h",
-                marker_color=["#00e676" if v >= 60 else "#ffeb3b" if v >= 45 else "#ff1744" for v in factors.values()],
+                marker_color=["#00e676" if v>=60 else "#ffeb3b" if v>=45 else "#ff1744"
+                              for v in factors.values()],
+                text=[f"{v:.0f}%" for v in factors.values()],
+                textposition="outside",
             ))
-            fig_prob.update_layout(
-                template="plotly_dark",
-                paper_bgcolor="#0d1117",
-                plot_bgcolor="#161b22",
-                height=250,
-                margin=dict(l=120, r=20, t=20, b=20),
-                xaxis=dict(range=[0, 100]),
+            bar_fig.update_layout(
+                template="plotly_dark", paper_bgcolor="#0d1117",
+                plot_bgcolor="#161b22", height=240,
+                margin=dict(l=120, r=40, t=10, b=10),
+                xaxis=dict(range=[0, 110]),
             )
-            fig_prob.add_vline(x=50, line_dash="dot", line_color="gray", opacity=0.5)
-            st.plotly_chart(fig_prob, use_container_width=True, key="prob_chart")
+            bar_fig.add_vline(x=50, line_dash="dot", line_color="gray", opacity=0.5)
+            st.plotly_chart(bar_fig, use_container_width=True, key="factors")
 
-    # ── TAB 3: CLAUDE AI ─────────────────────────────────────────────────────
-    with tab_ai:
+    # ════════════════════════════════════════════════════════
+    #  TAB 3 — CLAUDE AI CHAT
+    # ════════════════════════════════════════════════════════
+    with t3:
         st.subheader("🤖 Claude AI Trading Assistant")
-        st.caption("Powered by Anthropic Claude — Ask anything about the market")
+        st.caption("Powered by Anthropic Claude — live market data auto-included in every query")
 
-        if "chat_history" not in st.session_state:
-            st.session_state.chat_history = []
+        if "history" not in st.session_state:
+            st.session_state.history = []
 
-        # Build market context for Claude
-        df_ctx = fetch_data(symbol, bot["api"])
-        context_str = "No market data available"
-        if df_ctx is not None and not df_ctx.empty:
-            ta_ctx = bot["ta"].full_analysis(df_ctx)
-            prob_ctx = bot["prob"].quick_probability(df_ctx, symbol)
-            sig_ctx = bot["engine"].generate_signal(df_ctx, symbol)
-            expiry_ctx = bot["ea"].expiry_volatility_pattern(symbol.replace("50", ""))
-            context_str = f"""
-Symbol: {symbol}
-Current Price: {ta_ctx.get('price', 'N/A')}
-RSI(14): {ta_ctx.get('rsi', 'N/A')} — {ta_ctx.get('rsi_signal', '')}
-MACD: {ta_ctx.get('macd_signal_str', 'N/A')}
-Trend: {ta_ctx.get('trend', 'N/A')} | Structure: {ta_ctx.get('structure', '')}
-VWAP: {ta_ctx.get('vwap', 'N/A')} | Price {'above' if ta_ctx.get('above_vwap') else 'below'} VWAP
-ATR: {ta_ctx.get('atr', 'N/A')}
-BB Upper: {ta_ctx.get('bb_upper', 'N/A')} | BB Lower: {ta_ctx.get('bb_lower', 'N/A')}
-Support: {ta_ctx.get('support', [])} | Resistance: {ta_ctx.get('resistance', [])}
-Signal: {sig_ctx.get('signal', 'WAIT')} | Quality: {sig_ctx.get('quality', '')}
-Entry: {sig_ctx.get('entry', '')} | SL: {sig_ctx.get('stop_loss', '')} | Targets: {sig_ctx.get('targets', [])}
-Entry Probability: {prob_ctx.get('probability', 50)}%
-Expiry: {expiry_ctx.get('expiry_date', '')} | DTE: {expiry_ctx.get('dte', '')} | {'EXPIRY DAY' if expiry_ctx.get('is_expiry') else 'Normal day'}
-Target Multiplier: {expiry_ctx.get('target_multiplier', 1)}x
-"""
+        # Build live context string
+        df_c = load_data(symbol)
+        ctx = "No data available"
+        if df_c is not None and not df_c.empty:
+            ta_c   = bot["ta"].full_analysis(df_c)
+            sig_c  = bot["eng"].generate_signal(df_c, symbol)
+            prob_c = bot["prob"].quick_probability(df_c, symbol)
+            exp_c  = bot["ea"].expiry_volatility_pattern(symbol.replace("50",""))
+            ctx = f"""Symbol: {symbol}
+Price: {ta_c.get('price','N/A')}  |  RSI: {ta_c.get('rsi','N/A')} ({ta_c.get('rsi_signal','')})
+MACD: {ta_c.get('macd_signal_str','')}  |  Trend: {ta_c.get('trend','')} / {ta_c.get('structure','')}
+VWAP: {ta_c.get('vwap','')} ({'above' if ta_c.get('above_vwap') else 'below'})  |  ATR: {ta_c.get('atr','')}
+Support: {ta_c.get('support',[])}  |  Resistance: {ta_c.get('resistance',[])}
+Signal: {sig_c.get('signal','WAIT')} ({sig_c.get('quality','')})
+Entry: {sig_c.get('entry','')}  |  SL: {sig_c.get('stop_loss','')}  |  Targets: {sig_c.get('targets',[])}
+Entry Probability: {prob_c.get('probability',50)}%  |  Rec: {prob_c.get('recommendation','')}
+Expiry: {exp_c.get('expiry_date','')} DTE={exp_c.get('dte','')} {'⚠️ EXPIRY DAY' if exp_c.get('is_expiry') else ''}
+Target Multiplier: {exp_c.get('target_multiplier',1)}x  |  IV Crush: {exp_c.get('iv_crush_risk','')}"""
 
-        # Quick query buttons
+        # Quick buttons
         st.markdown("**Quick Queries:**")
-        q_col1, q_col2, q_col3, q_col4 = st.columns(4)
-        quick_queries = {
-            q_col1: f"Should I take {symbol} call right now?",
-            q_col2: f"What's the probability of {symbol} moving 50 points up?",
-            q_col3: f"Is this a good scalping setup?",
-            q_col4: f"Show {symbol} analysis for next 30 minutes",
+        qb1, qb2, qb3, qb4 = st.columns(4)
+        quick = {
+            qb1: f"Should I take {symbol} call right now?",
+            qb2: f"What's the probability of {symbol} moving 50 pts up?",
+            qb3: f"Is this a good scalping setup for {symbol}?",
+            qb4: f"Give me key levels for {symbol} next 30 mins",
         }
-        for col, query in quick_queries.items():
-            if col.button(query[:30] + "...", use_container_width=True):
-                with st.spinner("Claude is analyzing..."):
-                    response = ask_claude(query, context_str)
-                st.session_state.chat_history.append({"role": "user", "content": query})
-                st.session_state.chat_history.append({"role": "assistant", "content": response})
+        for col, q in quick.items():
+            if col.button(q[:28]+"…", use_container_width=True, key=q[:15]):
+                with st.spinner("Claude analysing..."):
+                    ans = ask_claude(q, ctx)
+                st.session_state.history += [{"role":"user","content":q}, {"role":"bot","content":ans}]
+                st.rerun()
 
         st.divider()
 
-        # Chat history display
-        for msg in st.session_state.chat_history:
-            if msg["role"] == "user":
-                st.markdown(f'<div class="chat-user">👤 <strong>You:</strong> {msg["content"]}</div>', unsafe_allow_html=True)
+        # Chat display
+        for m in st.session_state.history:
+            if m["role"] == "user":
+                st.markdown(f'<div class="chat-user">👤 <b>You:</b> {m["content"]}</div>', unsafe_allow_html=True)
             else:
-                st.markdown(f'<div class="chat-bot">🤖 <strong>Claude:</strong><br>{msg["content"]}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="chat-bot">🤖 <b>Claude:</b><br>{m["content"]}</div>', unsafe_allow_html=True)
 
-        # Query input
-        with st.form("chat_form", clear_on_submit=True):
-            user_query = st.text_input("Ask Claude about the market...",
-                placeholder="e.g. Should I take NIFTY call at 24100? What are the key levels?")
-            col_send, col_clear = st.columns([4, 1])
-            submitted = col_send.form_submit_button("Send", use_container_width=True)
-            cleared = col_clear.form_submit_button("Clear", use_container_width=True)
+        # Input
+        with st.form("chat", clear_on_submit=True):
+            q_in = st.text_input("Ask anything about the market...",
+                placeholder="e.g. Should I take NIFTY call at 24100?  |  What are SBIN key levels?")
+            cs, cc = st.columns([4, 1])
+            sub = cs.form_submit_button("Ask Claude 🤖", use_container_width=True, type="primary")
+            clr = cc.form_submit_button("Clear", use_container_width=True)
 
-        if submitted and user_query:
-            with st.spinner("Claude is analyzing market data..."):
-                response = ask_claude(user_query, context_str)
-            st.session_state.chat_history.append({"role": "user", "content": user_query})
-            st.session_state.chat_history.append({"role": "assistant", "content": response})
+        if sub and q_in:
+            with st.spinner("Claude analysing market data..."):
+                ans = ask_claude(q_in, ctx)
+            st.session_state.history += [{"role":"user","content":q_in}, {"role":"bot","content":ans}]
+            st.rerun()
+        if clr:
+            st.session_state.history = []
             st.rerun()
 
-        if cleared:
-            st.session_state.chat_history = []
-            st.rerun()
+        with st.expander("📋 Market context sent to Claude"):
+            st.code(ctx)
 
-        # Market context preview
-        with st.expander("📋 Current Market Context (sent to Claude)"):
-            st.code(context_str)
-
-    # ── TAB 4: PAPER TRADING ─────────────────────────────────────────────────
-    with tab_paper:
+    # ════════════════════════════════════════════════════════
+    #  TAB 4 — PAPER TRADING
+    # ════════════════════════════════════════════════════════
+    with t4:
         st.subheader("📝 Paper Trading Dashboard")
+        port    = bot["paper"].get_portfolio()
+        metrics = port.get("metrics", {})
 
-        portfolio = bot["paper"].get_portfolio()
-        metrics = portfolio.get("metrics", {})
-
-        # Metrics row
-        m1, m2, m3, m4, m5, m6 = st.columns(6)
-        pnl = portfolio.get("realized_pnl", 0)
-        m1.metric("Capital", f"₹{portfolio.get('capital', 0):,.0f}")
-        m2.metric("Realized P&L", f"₹{pnl:+,.2f}", delta_color="normal")
-        m3.metric("Open Positions", portfolio.get("open_positions", 0))
-        m4.metric("Total Trades", metrics.get("total_trades", 0))
-        m5.metric("Win Rate", f"{metrics.get('win_rate', 0):.1f}%")
-        m6.metric("Max Drawdown", f"₹{metrics.get('max_drawdown', 0):,.0f}")
+        pm1, pm2, pm3, pm4, pm5, pm6 = st.columns(6)
+        pnl_val = port.get("realized_pnl", 0)
+        pm1.metric("Capital",      f"₹{port.get('capital',0):,.0f}")
+        pm2.metric("Realized P&L", f"₹{pnl_val:+,.2f}")
+        pm3.metric("Open",         port.get("open_positions", 0))
+        pm4.metric("Total Trades", metrics.get("total_trades", 0))
+        pm5.metric("Win Rate",     f"{metrics.get('win_rate',0):.1f}%")
+        pm6.metric("Max DD",       f"₹{metrics.get('max_drawdown',0):,.0f}")
 
         st.divider()
+        pf1, pf2 = st.columns([1, 2])
 
-        pt_col1, pt_col2 = st.columns([1, 2])
+        with pf1:
+            st.markdown("#### New Trade")
+            with st.form("new_trade"):
+                pt_sym  = st.selectbox("Symbol", bot["syms"], key="pt_s")
+                pt_type = st.radio("Type", ["BUY","SELL"], horizontal=True)
+                ltp_hint = load_ltp(pt_sym)
+                pt_price = st.number_input("Entry Price", value=float(ltp_hint or 0), min_value=0.0, step=0.05)
+                pt_qty   = st.number_input("Qty (lots)", min_value=1, value=1, step=1)
+                pt_opt   = st.selectbox("Option", ["None","CE","PE"])
+                pt_str   = st.number_input("Strike", min_value=0.0, step=50.0)
+                if st.form_submit_button("Enter Trade ✅", type="primary", use_container_width=True):
+                    if pt_price > 0:
+                        tr = bot["paper"].enter_trade(
+                            pt_sym, pt_type, pt_price, pt_qty,
+                            None if pt_opt=="None" else pt_opt,
+                            pt_str if pt_str > 0 else None,
+                        )
+                        st.success(f"Trade #{tr['id']} entered!")
+                        st.rerun()
 
-        with pt_col1:
-            st.markdown("#### New Paper Trade")
-            with st.form("paper_trade_form"):
-                pt_sym = st.selectbox("Symbol", bot["instruments"])
-                pt_type = st.radio("Type", ["BUY", "SELL"], horizontal=True)
-                pt_price = st.number_input("Entry Price", min_value=0.0, step=0.5)
-
-                # Auto-fill current price
-                if st.form_submit_button("Get Current Price", type="secondary"):
-                    df_pt = fetch_data(pt_sym, bot["api"])
-                    if df_pt is not None:
-                        st.session_state["pt_price"] = float(df_pt["close"].iloc[-1])
-
-                pt_qty = st.number_input("Quantity (lots)", min_value=1, value=1, step=1)
-                pt_opt = st.selectbox("Option Type (optional)", ["None", "CE", "PE"])
-                pt_strike = st.number_input("Strike (options only)", min_value=0.0, step=50.0)
-                pt_submit = st.form_submit_button("Enter Trade", use_container_width=True, type="primary")
-
-                if pt_submit and pt_price > 0:
-                    opt_type = None if pt_opt == "None" else pt_opt
-                    strike_val = pt_strike if pt_strike > 0 else None
-                    trade = bot["paper"].enter_trade(pt_sym, pt_type, pt_price, pt_qty, opt_type, strike_val)
-                    st.success(f"Trade #{trade['id']} entered: {pt_type} {pt_sym} @ {pt_price}")
-                    st.rerun()
-
-        with pt_col2:
-            # Open positions
-            open_trades = portfolio.get("open_trades", [])
-            if open_trades:
+        with pf2:
+            open_t = port.get("open_trades", [])
+            if open_t:
                 st.markdown("#### Open Positions")
-                for trade in open_trades:
-                    with st.container():
-                        tc1, tc2, tc3, tc4 = st.columns([2, 2, 2, 1])
-                        tc1.markdown(f"**{trade.get('symbol')}** {trade.get('trade_type')}")
-                        tc2.markdown(f"Entry: `{trade.get('entry_price')}`")
-                        tc3.markdown(f"Qty: `{trade.get('quantity')}`")
-                        with st.form(f"exit_form_{trade['id']}"):
-                            exit_p = st.number_input("Exit Price", min_value=0.0, step=0.5, key=f"ep_{trade['id']}")
-                            if st.form_submit_button("Exit", use_container_width=True):
-                                if exit_p > 0:
-                                    result = bot["paper"].exit_trade(trade["id"], exit_p)
-                                    pnl_val = result.get("pnl", 0) or 0
-                                    if pnl_val >= 0:
-                                        st.success(f"Closed +₹{pnl_val:.2f}")
-                                    else:
-                                        st.error(f"Closed ₹{pnl_val:.2f}")
+                for tr in open_t:
+                    with st.container(border=True):
+                        c1, c2, c3 = st.columns([3, 2, 2])
+                        c1.markdown(f"**{tr.get('symbol')}** — {tr.get('trade_type')}")
+                        c2.markdown(f"Entry `{tr.get('entry_price')}`  Qty `{tr.get('quantity')}`")
+                        with st.form(f"exit_{tr['id']}"):
+                            ltp_exit = load_ltp(tr.get("symbol",""))
+                            ep = st.number_input("Exit price", value=float(ltp_exit or 0), min_value=0.0, step=0.05, key=f"ep{tr['id']}")
+                            if st.form_submit_button("Exit 🔴", use_container_width=True):
+                                if ep > 0:
+                                    res = bot["paper"].exit_trade(tr["id"], ep)
+                                    pv  = res.get("pnl",0) or 0
+                                    st.success(f"Closed  P&L: ₹{pv:+.2f}")
                                     st.rerun()
             else:
                 st.info("No open positions")
 
-        # Trade history table
-        closed_trades = portfolio.get("closed_trades", [])
-        if closed_trades:
+        closed = port.get("closed_trades", [])
+        if closed:
             st.markdown("#### Trade History")
-            hist_df = pd.DataFrame(closed_trades)[
-                ["symbol", "trade_type", "entry_time", "entry_price", "exit_price", "quantity", "pnl"]
-            ].rename(columns={
-                "symbol": "Symbol", "trade_type": "Type",
-                "entry_time": "Entry Time", "entry_price": "Entry",
-                "exit_price": "Exit", "quantity": "Qty", "pnl": "P&L"
-            })
-            st.dataframe(
-                hist_df.style.applymap(
-                    lambda v: "color: #00e676" if isinstance(v, (int, float)) and v > 0
-                    else "color: #ff1744" if isinstance(v, (int, float)) and v < 0 else "",
-                    subset=["P&L"]
-                ),
-                use_container_width=True,
-                hide_index=True,
-            )
+            hist_df = pd.DataFrame(closed)[["symbol","trade_type","entry_time","entry_price","exit_price","quantity","pnl"]]
+            hist_df.columns = ["Symbol","Type","Entry Time","Entry","Exit","Qty","P&L"]
+            st.dataframe(hist_df, use_container_width=True, hide_index=True)
 
-    # ── TAB 5: BACKTEST ──────────────────────────────────────────────────────
-    with tab_backtest:
+    # ════════════════════════════════════════════════════════
+    #  TAB 5 — BACKTEST
+    # ════════════════════════════════════════════════════════
+    with t5:
         st.subheader("📈 Strategy Backtest")
-        bt_col1, bt_col2 = st.columns([1, 3])
-
-        with bt_col1:
-            bt_sym = st.selectbox("Symbol to Backtest", bot["instruments"], key="bt_sym")
-            st.caption("Uses last 10 days of 5-min data")
-            run_bt = st.button("Run Backtest", type="primary", use_container_width=True)
+        bc1, bc2 = st.columns([1, 3])
+        with bc1:
+            bt_sym = st.selectbox("Symbol", bot["syms"], key="bt")
+            st.caption("Uses last 5 days of 5-min data")
+            run_bt = st.button("Run Backtest ▶", type="primary", use_container_width=True)
 
         if run_bt:
-            with st.spinner(f"Running backtest on {bt_sym}..."):
-                df_bt = fetch_data(bt_sym, bot["api"])
-                if df_bt is not None:
-                    result = bot["paper"].backtest_strategy(
-                        {bt_sym: df_bt}, bot["engine"].generate_signal
+            with st.spinner("Running..."):
+                df_bt = load_data(bt_sym)
+            if df_bt is not None:
+                result = bot["paper"].backtest_strategy({bt_sym: df_bt}, bot["eng"].generate_signal)
+                with bc2:
+                    b1,b2,b3,b4,b5 = st.columns(5)
+                    b1.metric("Trades",   result.get("total_trades",0))
+                    b2.metric("Win Rate", f"{result.get('win_rate',0):.1f}%")
+                    b3.metric("P&L",      f"{result.get('total_pnl',0):+.2f}")
+                    b4.metric("Max DD",   f"{result.get('max_drawdown',0):.2f}")
+                    b5.metric("Avg/Trade",f"{result.get('avg_pnl_per_trade',0):.2f}")
+
+                eq = result.get("equity_curve", [0])
+                if len(eq) > 1:
+                    import plotly.graph_objects as go
+                    pos = eq[-1] >= 0
+                    eq_fig = go.Figure(go.Scatter(
+                        y=eq, mode="lines",
+                        line=dict(color="#00e676" if pos else "#ff1744", width=2),
+                        fill="tozeroy",
+                        fillcolor="rgba(0,230,118,.1)" if pos else "rgba(255,23,68,.1)",
+                    ))
+                    eq_fig.update_layout(
+                        template="plotly_dark", paper_bgcolor="#0d1117",
+                        plot_bgcolor="#161b22", height=280,
+                        title="Equity Curve",
+                        margin=dict(l=40, r=20, t=40, b=20),
                     )
-                    with bt_col2:
-                        m1, m2, m3, m4, m5 = st.columns(5)
-                        m1.metric("Total Trades", result.get("total_trades", 0))
-                        m2.metric("Win Rate", f"{result.get('win_rate', 0):.1f}%")
-                        m3.metric("Total P&L", f"{result.get('total_pnl', 0):+.2f}")
-                        m4.metric("Max Drawdown", f"{result.get('max_drawdown', 0):.2f}")
-                        m5.metric("Avg P&L/Trade", f"{result.get('avg_pnl_per_trade', 0):.2f}")
+                    st.plotly_chart(eq_fig, use_container_width=True, key="eq")
 
-                    # Equity curve
-                    equity = result.get("equity_curve", [0])
-                    if len(equity) > 1:
-                        import plotly.graph_objects as go
-                        fig_eq = go.Figure()
-                        fig_eq.add_trace(go.Scatter(
-                            y=equity,
-                            mode="lines",
-                            line=dict(color="#00e676" if equity[-1] >= 0 else "#ff1744", width=2),
-                            fill="tozeroy",
-                            fillcolor="rgba(0,230,118,0.1)" if equity[-1] >= 0 else "rgba(255,23,68,0.1)",
-                            name="Equity Curve",
-                        ))
-                        fig_eq.update_layout(
-                            template="plotly_dark",
-                            paper_bgcolor="#0d1117",
-                            plot_bgcolor="#161b22",
-                            height=300,
-                            title="Equity Curve",
-                            margin=dict(l=40, r=20, t=40, b=20),
-                        )
-                        st.plotly_chart(fig_eq, use_container_width=True, key="eq_curve")
-
-                    # Trade table
-                    trades = result.get("trades", [])
-                    if trades:
-                        st.markdown("**Recent Backtest Trades**")
-                        bt_df = pd.DataFrame(trades)
-                        st.dataframe(bt_df, use_container_width=True, hide_index=True)
-                else:
-                    st.warning("No data for backtest")
+                trades = result.get("trades", [])
+                if trades:
+                    st.dataframe(pd.DataFrame(trades), use_container_width=True, hide_index=True)
+            else:
+                st.warning("No data for backtest")
 
 
 if __name__ == "__main__":

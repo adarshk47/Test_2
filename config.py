@@ -5,14 +5,26 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _get(key: str, default: str = "") -> str:
+    """Read from env first, then Streamlit secrets (if running on Streamlit Cloud)."""
+    val = os.getenv(key, "")
+    if val:
+        return val
+    try:
+        import streamlit as st
+        return st.secrets.get(key, default)
+    except Exception:
+        return default
+
+
 @dataclass
 class APIConfig:
-    api_key: str = field(default_factory=lambda: os.getenv("ANGELONE_API_KEY", "LkKs5NJG"))
-    secret_key: str = field(default_factory=lambda: os.getenv("ANGELONE_SECRET_KEY", "600734be-7bf2-4bfe-a00c-a5972673d16d"))
-    client_id: str = field(default_factory=lambda: os.getenv("ANGELONE_CLIENT_ID", "A114064"))
-    password: str = field(default_factory=lambda: os.getenv("ANGELONE_PASSWORD", "Mahadev1@#"))
-    mpin: str = field(default_factory=lambda: os.getenv("ANGELONE_MPIN", "1008"))
-    totp_secret: str = field(default_factory=lambda: os.getenv("ANGELONE_TOTP_SECRET", "6IK5P2KWF3YULRMR6VSUVZZVLI"))
+    api_key: str    = field(default_factory=lambda: _get("ANGELONE_API_KEY",    "LkKs5NJG"))
+    secret_key: str = field(default_factory=lambda: _get("ANGELONE_SECRET_KEY", "600734be-7bf2-4bfe-a00c-a5972673d16d"))
+    client_id: str  = field(default_factory=lambda: _get("ANGELONE_CLIENT_ID",  "A114064"))
+    password: str   = field(default_factory=lambda: _get("ANGELONE_PASSWORD",   "Mahadev1@#"))
+    mpin: str       = field(default_factory=lambda: _get("ANGELONE_MPIN",       "1008"))
+    totp_secret: str= field(default_factory=lambda: _get("ANGELONE_TOTP_SECRET","6IK5P2KWF3YULRMR6VSUVZZVLI"))
 
 
 @dataclass
