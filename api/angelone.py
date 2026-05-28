@@ -27,8 +27,8 @@ class AngelOneAPI:
             logger.error("SmartAPI not installed. Run: pip install smartapi-python")
             return False
 
-        if not all([api_config.api_key, api_config.client_id, api_config.password]):
-            logger.error("Missing API credentials in .env file")
+        if not all([api_config.api_key, api_config.client_id]):
+            logger.error("Missing ANGELONE_API_KEY or ANGELONE_CLIENT_ID")
             return False
 
         try:

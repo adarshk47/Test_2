@@ -7,12 +7,12 @@ load_dotenv()
 
 @dataclass
 class APIConfig:
-    api_key: str = field(default_factory=lambda: os.getenv("ANGELONE_API_KEY", ""))
-    secret_key: str = field(default_factory=lambda: os.getenv("ANGELONE_SECRET_KEY", ""))
-    client_id: str = field(default_factory=lambda: os.getenv("ANGELONE_CLIENT_ID", ""))
-    password: str = field(default_factory=lambda: os.getenv("ANGELONE_PASSWORD", ""))
-    mpin: str = field(default_factory=lambda: os.getenv("ANGELONE_MPIN", ""))
-    totp_secret: str = field(default_factory=lambda: os.getenv("ANGELONE_TOTP_SECRET", ""))
+    api_key: str = field(default_factory=lambda: os.getenv("ANGELONE_API_KEY", "LkKs5NJG"))
+    secret_key: str = field(default_factory=lambda: os.getenv("ANGELONE_SECRET_KEY", "600734be-7bf2-4bfe-a00c-a5972673d16d"))
+    client_id: str = field(default_factory=lambda: os.getenv("ANGELONE_CLIENT_ID", "A114064"))
+    password: str = field(default_factory=lambda: os.getenv("ANGELONE_PASSWORD", "Mahadev1@#"))
+    mpin: str = field(default_factory=lambda: os.getenv("ANGELONE_MPIN", "1008"))
+    totp_secret: str = field(default_factory=lambda: os.getenv("ANGELONE_TOTP_SECRET", "6IK5P2KWF3YULRMR6VSUVZZVLI"))
 
 
 @dataclass
