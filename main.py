@@ -15,7 +15,7 @@ from rich.console import Console
 from rich.prompt import Prompt
 
 from config import INSTRUMENTS, trading_config
-from api.angelone import AngelOneAPI
+from api.data_fetcher import get_candle_data as _fetch_data, get_ltp as _fetch_ltp
 from analysis.technical import TechnicalAnalysis
 from analysis.volatility import VolatilityAnalysis
 from analysis.volume import VolumeAnalysis
@@ -37,7 +37,6 @@ logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
 class ScalperBot:
     def __init__(self):
-        self.api = AngelOneAPI()
         self.ta = TechnicalAnalysis()
         self.va = VolatilityAnalysis()
         self.vola = VolumeAnalysis()
@@ -51,18 +50,31 @@ class ScalperBot:
         self._cache_ts: Dict[str, datetime] = {}
         self._refresh_thread: Optional[threading.Thread] = None
         self._running = False
+        self._data_source = "—"
 
     # ── API & Data ────────────────────────────────────────────────────────
 
     def connect(self) -> bool:
-        console.print("[cyan]Connecting to AngelOne...[/cyan]")
-        ok = self.api.connect()
-        if ok:
-            console.print(f"[bold green]Connected ✓[/bold green]  Client: {self.api.obj and 'authenticated'}")
-        else:
-            console.print("[bold yellow]Running in OFFLINE mode (no API credentials or connection failed)[/bold yellow]")
-            console.print("[dim]Set credentials in .env file for live data. Using cached/demo data.[/dim]")
-        return ok
+        console.print("[cyan]Connecting to AngelOne (mpin + TOTP)...[/cyan]")
+        try:
+            from SmartApi import SmartConnect
+            import pyotp
+            from config import api_config
+            totp = pyotp.TOTP(api_config.totp_secret).now()
+            smart = SmartConnect(api_key=api_config.api_key)
+            data  = smart.generateSession(api_config.client_id, api_config.mpin, totp)
+            if data.get("status"):
+                self._data_source = "AngelOne"
+                console.print(f"[bold green]AngelOne connected ✓[/bold green]  ({api_config.client_id})")
+                return True
+            else:
+                console.print(f"[yellow]AngelOne login failed: {data.get('message','')} — using yfinance[/yellow]")
+        except ImportError:
+            console.print("[yellow]smartapi-python not found — using yfinance (NSE live data)[/yellow]")
+        except Exception as e:
+            console.print(f"[yellow]AngelOne error: {e} — using yfinance[/yellow]")
+        self._data_source = "yfinance"
+        return False
 
     def get_data(self, symbol: str, force: bool = False) -> Optional[pd.DataFrame]:
         sym = symbol.upper()
@@ -74,15 +86,14 @@ class ScalperBot:
             if age < trading_config.update_interval:
                 return self._cache[sym]
 
-        if self.api.connected:
-            df = self.api.get_candle_data(sym, days_back=10)
-            if df is not None and not df.empty:
-                self._cache[sym] = df
-                self._cache_ts[sym] = now
-                self.db.cache_candles(sym, "FIVE_MINUTE",
-                    [[str(idx), row["open"], row["high"], row["low"], row["close"], row["volume"]]
-                     for idx, row in df.iterrows()])
-                return df
+        df = _fetch_data(sym, days_back=5)
+        if df is not None and not df.empty:
+            self._cache[sym] = df
+            self._cache_ts[sym] = now
+            self.db.cache_candles(sym, "FIVE_MINUTE",
+                [[str(idx), row["open"], row["high"], row["low"], row["close"], row["volume"]]
+                 for idx, row in df.iterrows()])
+            return df
 
         # Fallback to cached DB data
         cached = self.db.get_cached_candles(sym, "FIVE_MINUTE", 200)
@@ -199,13 +210,15 @@ class ScalperBot:
         from ui.cli_display import _print_expiry
         _print_expiry(data)
 
-        if self.api.connected:
-            ltp = self.api.get_ltp(symbol.replace("WK", "").replace("MO", "").upper() + ("50" if "NIFTY" in symbol.upper() and "BANK" not in symbol.upper() else ""))
-            if ltp:
-                console.print(f"\n[dim]Current LTP: {ltp}[/dim]")
-                from utils.helpers import strikes_around_price
-                strikes = strikes_around_price(ltp, 3, 50)
-                console.print(f"[dim]ATM Strike: {strikes[3]}  Nearby: {strikes}[/dim]")
+        sym_ltp = symbol.replace("WK","").replace("MO","").upper()
+        if "NIFTY" in sym_ltp and "BANK" not in sym_ltp:
+            sym_ltp = "NIFTY50"
+        ltp = _fetch_ltp(sym_ltp)
+        if ltp:
+            console.print(f"\n[dim]Current LTP: {ltp}[/dim]")
+            from utils.helpers import strikes_around_price
+            strikes = strikes_around_price(ltp, 3, 50)
+            console.print(f"[dim]ATM Strike: {strikes[3]}  Nearby: {strikes}[/dim]")
 
     def cmd_paper_trade(self, parts: list):
         if len(parts) < 4:
@@ -239,7 +252,7 @@ class ScalperBot:
 
         if not exit_price:
             sym_hint = Prompt.ask("Enter symbol to get LTP")
-            exit_price = self.api.get_ltp(sym_hint.upper()) if self.api.connected else 0
+            exit_price = _fetch_ltp(sym_hint.upper()) or 0
             if not exit_price:
                 exit_price = float(Prompt.ask("Enter exit price manually"))
 
@@ -340,7 +353,7 @@ class ScalperBot:
 
         console.print()
         status_bar()
-        console.print("[dim]Type [bold]help[/bold] for commands, [bold]quit[/bold] to exit[/dim]\n")
+        console.print(f"[dim]Data source: [bold]{self._data_source}[/bold]  |  Type [bold]help[/bold] for commands, [bold]quit[/bold] to exit[/dim]\n")
 
         while True:
             try:

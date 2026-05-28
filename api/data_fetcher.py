@@ -1,6 +1,6 @@
 """
-Universal data fetcher — tries AngelOne first, falls back to yfinance.
-yfinance provides real NSE/BSE 5-min data, works on Streamlit Cloud.
+Universal data fetcher — tries AngelOne SmartAPI first, falls back to yfinance.
+yfinance provides real NSE/BSE 5-min data and works on Streamlit Cloud.
 """
 import logging
 from datetime import datetime, timedelta
@@ -10,7 +10,6 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-# yfinance symbol map for NSE/BSE instruments
 YFINANCE_SYMBOLS = {
     "NIFTY50":   "^NSEI",
     "SENSEX":    "^BSESN",
@@ -27,108 +26,113 @@ INTERVAL_MAP_YF = {
 }
 
 
-def fetch_yfinance(symbol: str, interval: str = "FIVE_MINUTE", days_back: int = 5) -> Optional[pd.DataFrame]:
-    try:
-        import yfinance as yf
-    except ImportError:
-        logger.error("yfinance not installed. Run: pip install yfinance")
-        return None
-
-    yf_sym = YFINANCE_SYMBOLS.get(symbol.upper())
-    if not yf_sym:
-        # Try direct NSE format
-        yf_sym = f"{symbol.upper()}.NS"
-
-    yf_interval = INTERVAL_MAP_YF.get(interval, "5m")
-    # yfinance only supports intraday data for last 60 days, max 7 days for 5m
-    period = f"{min(days_back, 5)}d"
-
-    try:
-        ticker = yf.Ticker(yf_sym)
-        df = ticker.history(period=period, interval=yf_interval, auto_adjust=True)
-        if df is None or df.empty:
-            logger.warning(f"No yfinance data for {yf_sym}")
-            return None
-
-        df = df.rename(columns={
-            "Open": "open", "High": "high",
-            "Low": "low", "Close": "close", "Volume": "volume",
-        })
-        df = df[["open", "high", "low", "close", "volume"]].dropna()
-        # Remove timezone info to keep consistent
-        if hasattr(df.index, "tz") and df.index.tz is not None:
-            df.index = df.index.tz_convert("Asia/Kolkata").tz_localize(None)
-        df = df.astype(float)
-        logger.info(f"yfinance: fetched {len(df)} candles for {yf_sym}")
-        return df
-    except Exception as e:
-        logger.error(f"yfinance fetch error for {yf_sym}: {e}")
-        return None
-
+# ── AngelOne (smartapi-python) ────────────────────────────────────────────────
 
 def fetch_angelone(symbol: str, interval: str = "FIVE_MINUTE", days_back: int = 5) -> Optional[pd.DataFrame]:
+    """Connect via SmartAPI using mpin + TOTP, fetch 5-min candles."""
     try:
-        from api.angelone import AngelOneAPI
-        from config import api_config
+        from SmartApi import SmartConnect          # optional dependency
         import pyotp
-        from SmartApi import SmartConnect
+        from config import api_config, INSTRUMENTS, INTERVAL_MAP
 
-        obj = SmartConnect(api_key=api_config.api_key)
-        totp = pyotp.TOTP(api_config.totp_secret).now() if api_config.totp_secret else ""
-        data = obj.generateSession(api_config.client_id, api_config.password, totp)
+        cfg = api_config
+        totp = pyotp.TOTP(cfg.totp_secret).now() if cfg.totp_secret else ""
+
+        smart = SmartConnect(api_key=cfg.api_key)
+        data  = smart.generateSession(cfg.client_id, cfg.mpin, totp)  # ← mpin
+
         if not data.get("status"):
+            logger.warning(f"AngelOne login failed: {data.get('message','')}")
             return None
 
-        from config import INSTRUMENTS, INTERVAL_MAP
         inst = INSTRUMENTS.get(symbol.upper())
         if not inst:
             return None
 
-        now = datetime.now()
-        to_date = now.strftime("%Y-%m-%d %H:%M")
+        now       = datetime.now()
+        to_date   = now.strftime("%Y-%m-%d %H:%M")
         from_date = (now - timedelta(days=days_back)).strftime("%Y-%m-%d %H:%M")
 
-        resp = obj.getCandleData({
-            "exchange": inst["exchange"],
+        resp = smart.getCandleData({
+            "exchange":    inst["exchange"],
             "symboltoken": inst["token"],
-            "interval": INTERVAL_MAP.get(interval, "FIVE_MINUTE"),
-            "fromdate": from_date,
-            "todate": to_date,
+            "interval":    INTERVAL_MAP.get(interval, "FIVE_MINUTE"),
+            "fromdate":    from_date,
+            "todate":      to_date,
         })
+
         if resp.get("status") and resp.get("data"):
-            df = pd.DataFrame(resp["data"], columns=["timestamp", "open", "high", "low", "close", "volume"])
+            df = pd.DataFrame(resp["data"],
+                              columns=["timestamp","open","high","low","close","volume"])
             df["timestamp"] = pd.to_datetime(df["timestamp"])
-            df = df.set_index("timestamp").sort_index()
-            return df.astype(float)
+            df = df.set_index("timestamp").sort_index().astype(float)
+            logger.info(f"AngelOne: {len(df)} candles for {symbol}")
+            return df
+
+    except ImportError:
+        logger.debug("smartapi-python not installed — skipping AngelOne")
     except Exception as e:
-        logger.debug(f"AngelOne fetch failed for {symbol}: {e}")
+        logger.debug(f"AngelOne fetch error for {symbol}: {e}")
+
     return None
 
+
+# ── yfinance fallback ─────────────────────────────────────────────────────────
+
+def fetch_yfinance(symbol: str, interval: str = "FIVE_MINUTE", days_back: int = 5) -> Optional[pd.DataFrame]:
+    """Real NSE/BSE data via yfinance — works everywhere including Streamlit Cloud."""
+    try:
+        import yfinance as yf
+    except ImportError:
+        logger.error("yfinance not installed: pip install yfinance")
+        return None
+
+    yf_sym   = YFINANCE_SYMBOLS.get(symbol.upper(), f"{symbol.upper()}.NS")
+    yf_int   = INTERVAL_MAP_YF.get(interval, "5m")
+    period   = f"{min(days_back, 5)}d"
+
+    try:
+        ticker = yf.Ticker(yf_sym)
+        df = ticker.history(period=period, interval=yf_int, auto_adjust=True)
+        if df is None or df.empty:
+            logger.warning(f"yfinance: no data for {yf_sym}")
+            return None
+
+        df = df.rename(columns={"Open":"open","High":"high","Low":"low",
+                                 "Close":"close","Volume":"volume"})
+        df = df[["open","high","low","close","volume"]].dropna()
+
+        if hasattr(df.index, "tz") and df.index.tz is not None:
+            df.index = df.index.tz_convert("Asia/Kolkata").tz_localize(None)
+
+        df = df.astype(float)
+        logger.info(f"yfinance: {len(df)} candles for {yf_sym}")
+        return df
+
+    except Exception as e:
+        logger.error(f"yfinance error for {yf_sym}: {e}")
+        return None
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
 
 def get_candle_data(symbol: str, interval: str = "FIVE_MINUTE", days_back: int = 5) -> Optional[pd.DataFrame]:
-    """Try AngelOne first; fall back to yfinance automatically."""
+    """AngelOne first → yfinance fallback. Transparent to caller."""
     df = fetch_angelone(symbol, interval, days_back)
     if df is not None and not df.empty:
-        logger.info(f"Data source: AngelOne ({symbol})")
         return df
 
-    df = fetch_yfinance(symbol, interval, days_back)
-    if df is not None and not df.empty:
-        logger.info(f"Data source: yfinance ({symbol})")
-        return df
-
-    return None
+    return fetch_yfinance(symbol, interval, days_back)
 
 
 def get_ltp(symbol: str) -> Optional[float]:
-    """Get last traded price — yfinance fast path."""
+    """Latest price — yfinance 1-min bar."""
     try:
         import yfinance as yf
         yf_sym = YFINANCE_SYMBOLS.get(symbol.upper(), f"{symbol.upper()}.NS")
-        ticker = yf.Ticker(yf_sym)
-        hist = ticker.history(period="1d", interval="1m")
+        hist = yf.Ticker(yf_sym).history(period="1d", interval="1m")
         if hist is not None and not hist.empty:
             return float(hist["Close"].iloc[-1])
     except Exception as e:
-        logger.error(f"LTP fetch error: {e}")
+        logger.error(f"LTP error: {e}")
     return None

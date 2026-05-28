@@ -36,7 +36,7 @@ class AngelOneAPI:
             totp_code = pyotp.TOTP(api_config.totp_secret).now() if api_config.totp_secret else ""
             data = self.obj.generateSession(
                 api_config.client_id,
-                api_config.password,
+                api_config.mpin,        # mpin not password
                 totp_code,
             )
             if data.get("status"):
