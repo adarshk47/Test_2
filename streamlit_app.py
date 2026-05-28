@@ -61,6 +61,9 @@ def _init():
     from trading.paper_trading import PaperTradingDashboard
     from database.db_manager import DatabaseManager
     from config import INSTRUMENTS
+    # Trigger AngelOne login once at startup
+    from api.data_fetcher import _login
+    _login()
     db = DatabaseManager()
     return dict(
         ta=TechnicalAnalysis(), va=VolatilityAnalysis(),
@@ -158,7 +161,12 @@ def main():
                 st.error("🔴 Market CLOSED")
         except Exception:
             pass
-        st.info("📡 Data: yfinance (NSE/BSE live)")
+        from api.data_fetcher import get_data_source
+        src = get_data_source()
+        if src == "AngelOne":
+            st.success("📡 AngelOne Live ✓")
+        else:
+            st.info("📡 yfinance (NSE live)")
         symbol = st.selectbox("Instrument", bot["syms"], index=0)
         if st.button("🔄 Refresh Data", use_container_width=True):
             st.cache_data.clear()
