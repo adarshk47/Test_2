@@ -411,7 +411,7 @@ class ScalperBot:
                         self.cmd_ask(query)
                 elif cmd == "status":
                     status_bar()
-                    console.print(f"[dim]Connected: {self.api.connected}  Cached symbols: {list(self._cache.keys())}[/dim]")
+                    console.print(f"[dim]Data source: {self._data_source}  Cached symbols: {list(self._cache.keys())}[/dim]")
                 else:
                     # Try natural language for unrecognized input
                     if len(line) > 10:
@@ -423,7 +423,6 @@ class ScalperBot:
                 logging.exception("Command error")
 
         self._running = False
-        self.api.disconnect()
         console.print("\n[dim]Goodbye. Trade safe![/dim]")
 
 
